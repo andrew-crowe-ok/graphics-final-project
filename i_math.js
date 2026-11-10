@@ -12,6 +12,12 @@ class complex_num{
     arg(){
         return Math.atan2(this.b,this.a);
     }
+    get im(){
+        return this.b;
+    }
+    get real(){
+        return this.a;
+    }
     //may extend
 }
 function log_z(z){
