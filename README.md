@@ -2,7 +2,7 @@
 
 A 3D pinball table rendered with WebGL 2, built as the CS 412 final project.
 
-**Play it:** <https://andrew-crowe-ok.github.io/graphics-final-project/>
+**Play it:** [https://andrew-crowe-ok.github.io/graphics-final-project/](https://dawud-shakir.github.io/cs512/hw_final/index.html)
 
 ## How to play
 
