@@ -1,11 +1,3 @@
-// Unit primitives, all centered on the origin:
-//   cube      spans [-1, 1] on every axis
-//   cylinder  radius 1, axis along y from -1 to 1, capped
-//   sphere    radius 1
-// Each returns { positions, normals, tangents, texCoords, indices }. The current
-// renderer only uses positions and normals; texCoords and tangents are there for
-// texture and normal mapping.
-
 function createCube() {
   const positions = new Float32Array([
     -1, -1,  1,   1, -1,  1,   1,  1,  1,  -1,  1,  1,   // front
@@ -18,10 +10,6 @@ function createCube() {
   const faceNormals = [[0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0]];
   const normals = new Float32Array(faceNormals.flatMap(n => [...n, ...n, ...n, ...n]));
 
-  // Tangent; bitangent = cross(N, T)
-  const faceTangents = [[1, 0, 0], [-1, 0, 0], [1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1]];
-  const tangents = new Float32Array(faceTangents.flatMap(t => [...t, ...t, ...t, ...t]));
-
   const texCoords = new Float32Array(faceNormals.flatMap(() => [0, 0, 1, 0, 1, 1, 0, 1]));
 
   const indices = new Uint16Array([
@@ -32,91 +20,104 @@ function createCube() {
     16, 17, 18,  16, 18, 19,   // right
     20, 21, 22,  20, 22, 23    // left
   ]);
-  return { positions, normals, tangents, texCoords, indices };
+  return { positions, normals, texCoords, indices };
 }
 
-function createCylinder(segments = 64, uRepeat = 3) {
-  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
+function createCylinder(segments, uRepeat = 3) {
+  const pos = [], nrm = [], tex = [], idx = [];
 
-  // Side: theta grows with u, so T points along the circle and B = cross(N, T) points up
+  // Side
   for (let i = 0; i <= segments; i++) {
-    const u = i / segments, theta = 2 * Math.PI * u;
-    const s = Math.sin(theta), c = Math.cos(theta);
+    const u = i / segments, a = u * Math.PI * 2, s = Math.sin(a), c = Math.cos(a);
     for (const y of [-1, 1]) {
-      positions.push(s, y, c);
-      normals.push(s, 0, c);
-      tangents.push(c, 0, -s);
-      texCoords.push(u * uRepeat, (y + 1) / 2);
+      pos.push(s, y, c);
+      nrm.push(s, 0, c);
+      tex.push(u * uRepeat, (y + 1) / 2);
     }
   }
   for (let i = 0; i < segments; i++) {
-    const k = 2 * i;
-    indices.push(k, k + 2, k + 3, k, k + 3, k + 1);
+    const b = i * 2;
+    idx.push(b, b + 2, b + 3, b, b + 3, b + 1);
   }
 
-  // Caps: planar mapping of x, z into the texture, T = +x on both
+  // Caps
   for (const y of [1, -1]) {
-    const center = positions.length / 3;
-    positions.push(0, y, 0);
-    normals.push(0, y, 0);
-    tangents.push(1, 0, 0);
-    texCoords.push(0.5, 0.5);
+    const center = pos.length / 3;
+    pos.push(0, y, 0);
+    nrm.push(0, y, 0);
+    tex.push(0.5, 0.5);
     for (let i = 0; i <= segments; i++) {
-      const theta = 2 * Math.PI * i / segments;
-      const s = Math.sin(theta), c = Math.cos(theta);
-      positions.push(s, y, c);
-      normals.push(0, y, 0);
-      tangents.push(1, 0, 0);
-      texCoords.push(0.5 + 0.5 * s, 0.5 - 0.5 * y * c);  // keeps cross(N, T) along +v
+      const a = (i / segments) * Math.PI * 2, s = Math.sin(a), c = Math.cos(a);
+      pos.push(s, y, c);
+      nrm.push(0, y, 0);
+      tex.push(0.5 + 0.5 * s, 0.5 - 0.5 * y * c);
     }
     for (let i = 0; i < segments; i++) {
       const a = center + 1 + i, b = a + 1;
-      if (y > 0) indices.push(center, a, b);
-      else indices.push(center, b, a);
+      if (y > 0) idx.push(center, a, b);
+      else idx.push(center, b, a);
     }
   }
 
-  return {
-    positions: new Float32Array(positions),
-    normals: new Float32Array(normals),
-    tangents: new Float32Array(tangents),
-    texCoords: new Float32Array(texCoords),
-    indices: new Uint16Array(indices)
-  };
+  return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
 }
 
-function createSphere(latBands = 24, longBands = 24) {
-  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
+function createSphere(segments) {
+  const pos = [], nrm = [], tex = [], idx = [];
 
-  for (let lat = 0; lat <= latBands; lat++) {
-    const v = 1 - lat / latBands;
-    const theta = (lat / latBands) * Math.PI;
-    const sinTheta = Math.sin(theta), cosTheta = Math.cos(theta);
-
-    for (let lon = 0; lon <= longBands; lon++) {
-      const u = 1 - lon / longBands;
-      const phi = (lon / longBands) * Math.PI * 2;
-      const s = Math.sin(phi), c = Math.cos(phi);
-      positions.push(c * sinTheta, cosTheta, s * sinTheta);
-      normals.push(c * sinTheta, cosTheta, s * sinTheta);
-      // u decreases with phi, so T = -d(pos)/d(phi) normalized
-      tangents.push(s, 0, -c);
-      texCoords.push(u, v);
+  for (let i = 0; i <= segments; i++) {
+    const v = (i / segments) * Math.PI, cosv = Math.cos(v), sinv = Math.sin(v);
+    for (let j = 0; j <= segments; j++) {
+      const u = (j / segments) * Math.PI * 2, cosu = Math.cos(u), sinu = Math.sin(u);
+      pos.push(sinv * cosu, cosv, sinv * sinu);
+      nrm.push(sinv * cosu, cosv, sinv * sinu);
+      tex.push(1 - j / segments, 1 - i / segments);
     }
   }
 
-  for (let lat = 0; lat < latBands; lat++) {
-    for (let lon = 0; lon < longBands; lon++) {
-      const first = lat * (longBands + 1) + lon, second = first + longBands + 1;
-      indices.push(first, first + 1, second, second, first + 1, second + 1);
+  for (let i = 0; i < segments; i++)
+    for (let j = 0; j < segments; j++) {
+      const a = i * (segments + 1) + j, b = a + 1, c = a + segments + 1, d = c + 1;
+      if (i > 0) idx.push(c, a, b);
+      if (i < segments - 1) idx.push(c, b, d);
     }
+
+  return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
+}
+
+function createFlipper(length, radius, segments) {
+  const pos = [], nrm = [], tex = [], idx = [];
+  const rim = [];
+  for (let i = 0; i <= segments; i++) rim.push([length, Math.PI / 2 - Math.PI * i / segments]);
+  for (let i = 0; i <= segments; i++) rim.push([0, -Math.PI / 2 - Math.PI * i / segments]);
+  rim.push(rim[0]);
+
+  rim.forEach(([cx, a], i) => {
+    const s = Math.sin(a), c = Math.cos(a);
+    for (const z of [0, 1]) {
+      pos.push(cx + radius * c, radius * s, z);
+      nrm.push(c, s, 0);
+      tex.push(i / (rim.length - 1), z);
+    }
+  });
+  for (let i = 0; i + 1 < rim.length; i++) {
+    const b = i * 2;
+    idx.push(b, b + 2, b + 3, b, b + 3, b + 1);
   }
 
-  return {
-    positions: new Float32Array(positions),
-    normals: new Float32Array(normals),
-    tangents: new Float32Array(tangents),
-    texCoords: new Float32Array(texCoords),
-    indices: new Uint16Array(indices)
-  };
+  for (const z of [1, 0]) {
+    const center = pos.length / 3;
+    pos.push(length / 2, 0, z);
+    nrm.push(0, 0, 2 * z - 1);
+    tex.push(0.5, 0.5);
+    for (const [cx, a] of rim) {
+      const x = cx + radius * Math.cos(a), y = radius * Math.sin(a);
+      pos.push(x, y, z);
+      nrm.push(0, 0, 2 * z - 1);
+      tex.push((x + radius) / (length + 2 * radius), (y + radius) / (2 * radius));
+    }
+    for (let i = 0; i + 1 < rim.length; i++) idx.push(center, center + 1 + i, center + 2 + i);
+  }
+
+  return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
 }
