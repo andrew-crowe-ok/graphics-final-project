@@ -43,10 +43,11 @@ uniform vec3 uLightColor[2];
 uniform vec3 uUp;
 uniform vec3 uFogColor;
 uniform vec3 uSkyColor;
-uniform vec3 uFloorCorner;
-uniform vec3 uFloorU;
-uniform vec3 uFloorV;
+uniform vec3 uBoardOrigin;
+uniform vec3 uBoardX;
+uniform vec3 uBoardY;
 uniform vec3 uFloorNormal;
+uniform vec4 uFloorRects[3];
 uniform vec4 uClipPlane;
 uniform vec2 uScreenSize;
 uniform vec3 uFloorEmissive;
@@ -63,7 +64,9 @@ uniform float uMirror;
 uniform float uShade;
 
 uniform sampler2D uTexture;
-uniform sampler2D uFloorTexture;
+uniform sampler2D uFloorTex0;
+uniform sampler2D uFloorTex1;
+uniform sampler2D uFloorTex2;
 uniform sampler2D uReflection;
 uniform highp sampler2DShadow uShadowMap;
 uniform int uMapping;
@@ -82,30 +85,48 @@ float schlick(float F0, vec3 N, vec3 V) {
   return F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 }
 
-vec3 playfield(vec3 R) {
-  vec3 n = uFloorNormal;
-  float t = dot(uFloorCorner - vPosition, n) / min(dot(R, n), -1e-4);
-  vec3 h = vPosition + t * R - uFloorCorner;
-  vec2 uv = vec2(dot(h, uFloorU) / dot(uFloorU, uFloorU), dot(h, uFloorV) / dot(uFloorV, uFloorV));
-  vec3 color = uFloorEmissive * texture(uFloorTexture, uv).rgb;
-  bool hit = dot(R, n) < 0.0 && all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
-  return hit ? color : vec3(0.01);
-}
-
-float arrowGlow() {
-  vec2 p = mix(uFloorRect.xy, uFloorRect.zw, vTexCoord);
+float arrowGlowAt(vec2 p) {
   float glow = 0.0;
   for (int i = 0; i < MAX_ARROWS; i++)
     glow += uArrows[i].z * (1.0 - smoothstep(0.8, 1.0, distance(p, uArrows[i].xy)));
   return glow;
 }
 
+vec3 sampleField(int idx, vec2 uv, vec2 p, float lod) {
+  vec3 texel = idx == 0 ? textureLod(uFloorTex0, uv, lod).rgb
+             : idx == 1 ? textureLod(uFloorTex1, uv, lod).rgb
+                        : textureLod(uFloorTex2, uv, lod).rgb;
+  vec3 emission = uFloorEmissive * texel;
+  float glow = arrowGlowAt(p);
+  return emission * (1.0 + ARROW_FLASH * glow) + ARROW_HALO * glow * uFloorEmissive;
+}
+
+vec3 playfield(vec3 R) {
+  vec3 n = uFloorNormal;
+  float denom = dot(R, n);
+  if (denom >= -1e-4) return vec3(0.01);
+  float t = dot(uBoardOrigin - vPosition, n) / denom;
+  if (t <= 0.0) return vec3(0.01);
+  vec3 h = vPosition + t * R - uBoardOrigin;
+  vec2 p = vec2(dot(h, uBoardX), dot(h, uBoardY));
+  float lod = log2(1.0 + t * 0.2);
+  float rd = FOG_DENSITY * max(t - FOG_START * 0.5, 0.0);
+  float atten = exp(-rd * rd);
+  for (int i = 0; i < 3; i++) {
+    vec4 r = uFloorRects[i];
+    if (all(greaterThanEqual(p, r.xy)) && all(lessThanEqual(p, r.zw))) {
+      vec2 uv = (p - r.xy) / (r.zw - r.xy);
+      return mix(uFogColor, sampleField(i, uv, p, lod), atten);
+    }
+  }
+  return vec3(0.01);
+}
+
 vec3 environment(vec3 R) {
-  float h = dot(R, uUp);
-  vec3 horizon = 4.0 * uFogColor;
-  vec3 ground = playfield(R);
-  return h > 0.0 ? mix(horizon, uSkyColor, smoothstep(0.0, 0.5, h))
-                 : mix(horizon, ground, smoothstep(0.0, 0.2, -h));
+  float h = dot(R, uFloorNormal);
+  vec3 horizon = 2.2 * uFogColor;
+  if (h > 0.0) return mix(horizon, uSkyColor, smoothstep(0.0, 0.5, h));
+  return mix(horizon, playfield(R), smoothstep(0.0, 0.25, -h));
 }
 
 void main() {
@@ -120,13 +141,13 @@ void main() {
   result += shadow * calculateLight(0, N, V, uColor);
   result += calculateLight(1, N, V, uColor);
 
-  float F = schlick(uReflectivity, N, V);
-  result += (uReflectivity > 0.0 ? F : 0.0) * environment(reflect(-V, N));
+  if (uReflectivity > 0.0)
+    result += schlick(uReflectivity, N, V) * environment(reflect(-V, N));
 
   vec3 texel = texture(uTexture, vTexCoord).rgb;
   vec3 emission = uMapping == NO_MAPPING ? uEmissive : uEmissive * texel;
   if (uMapping == FLOOR_MAPPING) {
-    float glow = arrowGlow();
+    float glow = arrowGlowAt(mix(uFloorRect.xy, uFloorRect.zw, vTexCoord));
     emission = emission * (1.0 + ARROW_FLASH * glow) + ARROW_HALO * glow * uEmissive;
   }
   result += emission + uTopEmissive * smoothstep(0.7, 0.9, dot(N, uUp));
@@ -329,14 +350,16 @@ function getUniforms(prog, names) {
 const program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
 const uniforms = getUniforms(program, ["uModelView", "uProjection", "uShadowMatrix", "uTexRepeat", "uLightDir",
   "uLightColor", "uUp", "uFogColor", "uSkyColor", "uColor", "uEmissive", "uTopEmissive", "uKs", "uShininess",
-  "uReflectivity", "uMirror", "uShade", "uMapping", "uTexture", "uShadowMap", "uFloorCorner", "uFloorU", "uFloorV",
-  "uFloorNormal", "uFloorEmissive", "uFloorTexture", "uClipPlane", "uScreenSize", "uReflection", "uFloorRect",
-  "uArrows"]);
+  "uReflectivity", "uMirror", "uShade", "uMapping", "uTexture", "uShadowMap", "uBoardOrigin", "uBoardX", "uBoardY",
+  "uFloorNormal", "uFloorRects", "uFloorEmissive", "uFloorTex0", "uFloorTex1", "uFloorTex2", "uClipPlane",
+  "uScreenSize", "uReflection", "uFloorRect", "uArrows"]);
 gl.useProgram(program);
 gl.uniform1i(uniforms.uTexture, 0);
 gl.uniform1i(uniforms.uShadowMap, 1);
-gl.uniform1i(uniforms.uFloorTexture, 2);
+gl.uniform1i(uniforms.uFloorTex0, 2);
 gl.uniform1i(uniforms.uReflection, 3);
+gl.uniform1i(uniforms.uFloorTex1, 4);
+gl.uniform1i(uniforms.uFloorTex2, 5);
 
 const shadowProgram = createProgram(SHADOW_VERTEX_SHADER, SHADOW_FRAGMENT_SHADER);
 const uLightMVP = gl.getUniformLocation(shadowProgram, "uLightMVP");
@@ -759,16 +782,18 @@ function floorRect(i) {
   return [x0, i === 0 ? y0 + CABINET.front : y0, x1, y1];
 }
 
+const FLOOR_RECTS_FLAT = new Float32Array(table.fields.flatMap((_, i) => floorRect(i)));
+
 function setView(matrix, clipPlane) {
   view = matrix;
-  const [x0, y0, x1, y1] = floorRect(game.field);
   const floorView = multiply(view, board);
   gl.uniform3fv(uniforms.uLightDir, LIGHTS.flatMap(l => transformDirection(view, l.pos.map((v, i) => v - TABLE_CENTER[i]))));
   gl.uniform3fv(uniforms.uUp, transformDirection(view, [0, 0, 1]));
-  gl.uniform3fv(uniforms.uFloorCorner, transformPoint(floorView, [x0, y0, 0]));
-  gl.uniform3fv(uniforms.uFloorU, transformDirection(floorView, [x1 - x0, 0, 0]));
-  gl.uniform3fv(uniforms.uFloorV, transformDirection(floorView, [0, y1 - y0, 0]));
+  gl.uniform3fv(uniforms.uBoardOrigin, transformPoint(floorView, [0, 0, 0]));
+  gl.uniform3fv(uniforms.uBoardX, transformDirection(floorView, [1, 0, 0]));
+  gl.uniform3fv(uniforms.uBoardY, transformDirection(floorView, [0, 1, 0]));
   gl.uniform3fv(uniforms.uFloorNormal, transformDirection(floorView, [0, 0, 1]));
+  gl.uniform4fv(uniforms.uFloorRects, FLOOR_RECTS_FLAT);
   gl.uniform4fv(uniforms.uClipPlane, clipPlane);
 }
 
@@ -928,7 +953,11 @@ function render(dt, insets, ballCam, zoom, strength) {
   gl.uniform3fv(uniforms.uFloorEmissive, palette.insert);
   gl.uniform3fv(uniforms.uArrows, table.arrows.flatMap(a => [a.p[0], a.p[1], a.lit / ARROW_LIT]));
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[game.field]);
+  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[0]);
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[1]);
+  gl.activeTexture(gl.TEXTURE5);
+  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[2]);
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, shadowMap);
   gl.activeTexture(gl.TEXTURE0);
