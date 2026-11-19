@@ -2,7 +2,7 @@
 
 A 3D neon pinball table in WebGL 2, built for CS 412.
 
-**Play:** https://andrew-crowe-ok.github.io/graphics-final-project/ · **Write-up:** [`pinball_algorithms-01.pdf`](pinball_algorithms-01.pdf)
+**Play:** https://andrew-crowe-ok.github.io/graphics-final-project/
 
 ## Code layout
 
