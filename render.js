@@ -244,7 +244,6 @@ void main() {
 const COMPOSITE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
-const float BLOOM_STRENGTH = 0.35;
 const float EXPOSURE = 1.4;
 
 in vec2 vUv;
@@ -254,13 +253,14 @@ uniform sampler2D uBloom0;
 uniform sampler2D uBloom1;
 uniform sampler2D uBloom2;
 uniform sampler2D uBloom3;
+uniform float uBloomStrength;
 
 out vec4 fragColor;
 
 void main() {
   vec3 bloom = texture(uBloom0, vUv).rgb + texture(uBloom1, vUv).rgb
              + texture(uBloom2, vUv).rgb + texture(uBloom3, vUv).rgb;
-  vec3 hdr = EXPOSURE * (texture(uScene, vUv).rgb + BLOOM_STRENGTH * bloom);
+  vec3 hdr = EXPOSURE * (texture(uScene, vUv).rgb + uBloomStrength * bloom);
   vec2 c = vUv - 0.5;
   fragColor = vec4(hdr / (1.0 + hdr) * (1.0 - 0.6 * dot(c, c)), 1.0);
 }
@@ -373,9 +373,10 @@ gl.useProgram(blurProgram);
 gl.uniform1i(blurUniforms.uImage, 0);
 
 const compositeProgram = createProgram(POST_VERTEX_SHADER, COMPOSITE_FRAGMENT_SHADER);
-const compositeUniforms = getUniforms(compositeProgram, ["uScene", "uBloom0", "uBloom1", "uBloom2", "uBloom3"]);
+const compositeUniforms = getUniforms(compositeProgram, ["uScene", "uBloom0", "uBloom1", "uBloom2", "uBloom3", "uBloomStrength"]);
 gl.useProgram(compositeProgram);
 ["uScene", "uBloom0", "uBloom1", "uBloom2", "uBloom3"].forEach((name, i) => gl.uniform1i(compositeUniforms[name], i));
+gl.uniform1f(compositeUniforms.uBloomStrength, 0.35);
 
 const shadowMap = gl.createTexture();
 gl.bindTexture(gl.TEXTURE_2D, shadowMap);
@@ -562,8 +563,8 @@ const fieldMaterials = FIELD_FLOORS.map((f, i) =>
 
 const smoothFactor = (rate60, dt) => 1 - Math.pow(1 - rate60, dt * 60);
 
-function updatePalette(dt) {
-  const idx = clamp(3 - game.balls, 0, PALETTES.length - 1);
+function updatePalette(dt, paletteOverride = -1) {
+  const idx = paletteOverride >= 0 ? paletteOverride : clamp(3 - game.balls, 0, PALETTES.length - 1);
   const target = PALETTES[idx];
   const t = smoothFactor(0.04, dt);
   for (const key in palette)
@@ -886,10 +887,11 @@ function drawBloom() {
   }
 }
 
-function drawComposite() {
+function drawComposite(bloomEnabled = true) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.useProgram(compositeProgram);
+  gl.uniform1f(compositeUniforms.uBloomStrength, bloomEnabled ? 0.35 : 0.0);
   [sceneTarget, ...bloomLevels.map(level => level.blur)].forEach((target, i) => {
     gl.activeTexture(gl.TEXTURE0 + i);
     gl.bindTexture(gl.TEXTURE_2D, target.texture);
@@ -908,10 +910,16 @@ function resize() {
   resizeTargets(w, h);
 }
 
-function render(dt, insets, ballCam, zoom, strength) {
+function render(dt, insets, ballCam, zoom, strength, dev = {}) {
+  const bloomOn = dev.bloom ?? true;
+  const trailOn = dev.trail ?? true;
+  const shadowsOn = dev.shadows ?? true;
+  const paletteOverride = dev.palette ?? -1;
+  const simDt = dev.simDt ?? dt;
+
   resize();
-  updatePalette(dt);
-  updateTrail(dt);
+  updatePalette(dt, paletteOverride);
+  updateTrail(simDt);
   const field = rect(table.fields[game.field]);
   cameraRect = cameraRect ? lerp(cameraRect, field, smoothFactor(0.08, dt)) : field;
   const c = center(cameraRect);
@@ -925,12 +933,14 @@ function render(dt, insets, ballCam, zoom, strength) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFramebuffer);
   gl.viewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
   gl.clear(gl.DEPTH_BUFFER_BIT);
-  gl.enable(gl.POLYGON_OFFSET_FILL);
-  gl.polygonOffset(2, 4);
-  shadowPass = true;
-  drawScene();
-  shadowPass = false;
-  gl.disable(gl.POLYGON_OFFSET_FILL);
+  if (shadowsOn) {
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(2, 4);
+    shadowPass = true;
+    drawScene();
+    shadowPass = false;
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+  }
 
   let camera, projection;
   if (ballCam) {
@@ -970,12 +980,12 @@ function render(dt, insets, ballCam, zoom, strength) {
   setView(camera, NO_CLIP);
   drawScene();
   drawWorld();
-  drawTrail(projection);
+  if (trailOn) drawTrail(projection);
   resolveScene();
 
   gl.disable(gl.DEPTH_TEST);
   gl.bindVertexArray(null);
-  drawBloom();
-  drawComposite();
+  if (bloomOn) drawBloom();
+  drawComposite(bloomOn);
   gl.enable(gl.DEPTH_TEST);
 }

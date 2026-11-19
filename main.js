@@ -38,6 +38,8 @@ function onKey(e, down) {
     if (down || !held) setPlunger(held);
   } else if (e.code === "KeyC") {
     if (down) toggleCamera();
+  } else if (typeof devTools !== "undefined" && devTools.handleKey(e.code, down)) {
+    // handled by devTools
   } else {
     return;
   }
@@ -179,9 +181,12 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.max(0, Math.min((now - last) / 1000, 1 / 30));
   last = now;
-  stepPhysics(dt);
-  render(dt, screenInsets, CAMERAS[cameraIndex].ballCam, zoom, mirror);
+  const hasDev = typeof devTools !== "undefined";
+  const simDt = hasDev ? devTools.stepDt(dt) : dt;
+  stepPhysics(simDt);
+  render(dt, screenInsets, CAMERAS[cameraIndex].ballCam, zoom, mirror, hasDev ? devTools.renderOptions(simDt) : undefined);
   updateHud();
+  if (hasDev) devTools.updateStats(dt, zoom);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
