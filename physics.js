@@ -153,6 +153,8 @@ function resetBall() {
   game.ball.p = [(LANE_X + FIELDS[0].x1) / 2, 0.5 + BALL_RADIUS];
   game.ball.v = [0, 0];
   game.ball.rotation = identity();
+  game.charging = false;
+  game.charge = 0;
   game.state = "ready";
 }
 
@@ -210,7 +212,10 @@ function collideWalls(ball) {
 
 function collideBumpers(ball) {
   for (const bp of table.bumpers) {
-    if (!resolve(ball, bp.c, BALL_RADIUS + bp.r, 0.9)) continue;
+    if (!resolve(ball, bp.c, BALL_RADIUS + bp.r, 0.9)) {
+      bp.touching = false;
+      continue;
+    }
     const n = sub(ball.p, bp.c);
     const len = Math.hypot(n[0], n[1]);
     const vn = dot(ball.v, n) / len;
@@ -218,8 +223,11 @@ function collideBumpers(ball) {
       ball.v[0] += (bp.kick - vn) * n[0] / len;
       ball.v[1] += (bp.kick - vn) * n[1] / len;
     }
-    game.score += bp.points;
-    bp.lit = 0.15;
+    if (!bp.touching) {
+      game.score += bp.points;
+      bp.lit = 0.15;
+      bp.touching = true;
+    }
   }
 }
 
@@ -300,6 +308,7 @@ function moveFlippers(dt) {
 }
 
 function stepPhysics(dt) {
+  if (!(dt > 0)) return;
   const h = dt / SUBSTEPS;
   const ball = game.ball;
 

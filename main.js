@@ -6,24 +6,61 @@ const TILT_KEYS = { KeyA: 0, KeyD: 1, KeyS: 2, KeyW: 3 };
 const PLUNGER_KEYS = new Set(["Space", "ArrowDown"]);
 
 const CAP_FOR = { ShiftLeft: "KeyZ", ShiftRight: "Slash", ArrowDown: "Space" };
-function showKey(code, down) {
-  const cap = document.querySelector(`kbd[data-code="${CAP_FOR[code] ?? code}"]`);
-  if (cap) cap.classList.toggle("down", down);
+const heldKeys = new Set();
+
+function syncCap(code) {
+  const capCode = CAP_FOR[code] ?? code;
+  const cap = document.querySelector(`kbd[data-code="${capCode}"]`);
+  if (!cap) return;
+  const active = [...heldKeys].some(k => (CAP_FOR[k] ?? k) === capCode);
+  cap.classList.toggle("down", active);
+}
+
+function hasHeldKey(predicate) {
+  for (const k of heldKeys) if (predicate(k)) return true;
+  return false;
 }
 
 function onKey(e, down) {
   if (down) setTouchMode(false);
   if (e.repeat) return;
-  showKey(e.code, down);
-  if (e.code in FLIPPER_KEYS) setFlipper(FLIPPER_KEYS[e.code], down);
-  else if (e.code in TILT_KEYS) setTilt(TILT_KEYS[e.code], down);
-  else if (PLUNGER_KEYS.has(e.code)) setPlunger(down);
-  else if (e.code === "KeyC") { if (down) toggleCamera(); }
-  else return;
+  if (down) heldKeys.add(e.code);
+  else heldKeys.delete(e.code);
+  syncCap(e.code);
+  if (e.code in FLIPPER_KEYS) {
+    const side = FLIPPER_KEYS[e.code];
+    setFlipper(side, hasHeldKey(k => FLIPPER_KEYS[k] === side));
+  } else if (e.code in TILT_KEYS) {
+    const dir = TILT_KEYS[e.code];
+    setTilt(dir, hasHeldKey(k => TILT_KEYS[k] === dir));
+  } else if (PLUNGER_KEYS.has(e.code)) {
+    const held = hasHeldKey(k => PLUNGER_KEYS.has(k));
+    if (down || !held) setPlunger(held);
+  } else if (e.code === "KeyC") {
+    if (down) toggleCamera();
+  } else {
+    return;
+  }
   e.preventDefault();
 }
 window.addEventListener("keydown", e => onKey(e, true));
 window.addEventListener("keyup", e => onKey(e, false));
+
+function releaseAllInputs() {
+  if (heldKeys.size === 0) return;
+  const codes = [...heldKeys];
+  heldKeys.clear();
+  for (const code of codes) syncCap(code);
+  setFlipper(0, false);
+  setFlipper(1, false);
+  for (let i = 0; i < 4; i++) setTilt(i, false);
+  if (game.charging) {
+    game.charging = false;
+    game.charge = 0;
+  }
+}
+window.addEventListener("blur", releaseAllInputs);
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAllInputs(); });
 
 function holdControl(el, onChange) {
   const fingers = new Set();
@@ -140,10 +177,10 @@ measureInsets();
 
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min((now - last) / 1000, 1 / 30);
+  const dt = Math.max(0, Math.min((now - last) / 1000, 1 / 30));
   last = now;
   stepPhysics(dt);
-  render(screenInsets, CAMERAS[cameraIndex].ballCam, zoom, mirror);
+  render(dt, screenInsets, CAMERAS[cameraIndex].ballCam, zoom, mirror);
   updateHud();
   requestAnimationFrame(frame);
 }

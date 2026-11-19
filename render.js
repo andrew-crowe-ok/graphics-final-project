@@ -297,6 +297,7 @@ const CAMERA = {
 
 const canvas = document.getElementById("glcanvas");
 const gl = canvas.getContext("webgl2", { powerPreference: "high-performance" });
+if (!gl) throw new Error("WebGL 2 is not supported");
 if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("EXT_color_buffer_float is not supported");
 
 function compile(type, source) {
@@ -389,7 +390,8 @@ for (let i = 0; i < BLOOM_LEVELS; i++) bloomLevels.push({ temp: createTarget(), 
 
 const colorRenderbuffer = createRenderbuffer();
 const depthRenderbuffer = createRenderbuffer();
-const samples = Math.min(4, gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES)[0]);
+const supportedSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES);
+const samples = Math.min(4, supportedSamples && supportedSamples.length ? supportedSamples[0] : 0);
 const msaaFramebuffer = gl.createFramebuffer();
 gl.bindFramebuffer(gl.FRAMEBUFFER, msaaFramebuffer);
 gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colorRenderbuffer);
@@ -451,7 +453,28 @@ function createMesh({ positions, normals, texCoords, indices }) {
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder(32));
 const sphereMesh = createMesh(createSphere(32));
-const flipperMesh = createMesh(createFlipper(table.flippers[0].length, table.flippers[0].radius, 16));
+const flipperMeshes = new Map();
+function getFlipperMesh(f) {
+  const key = `${f.length}:${f.radius}`;
+  let mesh = flipperMeshes.get(key);
+  if (!mesh) {
+    mesh = createMesh(createFlipper(f.length, f.radius, 16));
+    flipperMeshes.set(key, mesh);
+  }
+  return mesh;
+}
+
+const WALL_POSTS = (() => {
+  const seen = new Map();
+  for (const w of table.walls) {
+    if (w.hidden) continue;
+    for (const p of [w.a, w.b]) {
+      const key = `${Math.round(p[0] * 1e4)},${Math.round(p[1] * 1e4)}`;
+      if (!seen.has(key)) seen.set(key, p);
+    }
+  }
+  return [...seen.values()];
+})();
 
 function createTrailBuffer(name, size) {
   const buffer = gl.createBuffer();
@@ -514,10 +537,14 @@ const MATERIALS = {
 const fieldMaterials = FIELD_FLOORS.map((f, i) =>
   ({ ...MATERIALS.playfield, texture: fieldTextures[i], mirror: f.mirror, rect: floorRect(i) }));
 
-function updatePalette() {
-  const target = PALETTES[(3 - game.balls) % PALETTES.length];
+const smoothFactor = (rate60, dt) => 1 - Math.pow(1 - rate60, dt * 60);
+
+function updatePalette(dt) {
+  const idx = clamp(3 - game.balls, 0, PALETTES.length - 1);
+  const target = PALETTES[idx];
+  const t = smoothFactor(0.04, dt);
   for (const key in palette)
-    palette[key].forEach((v, i) => { palette[key][i] = v + (target[key][i] - v) * 0.04; });
+    palette[key].forEach((v, i) => { palette[key][i] = v + (target[key][i] - v) * t; });
 }
 
 gl.enable(gl.DEPTH_TEST);
@@ -571,11 +598,12 @@ function orbit(eye, target, pivot) {
   return lookAt(transformPoint(m, eye), transformPoint(m, target), transformDirection(m, [0, 0, 1]));
 }
 
-function chaseView() {
+function chaseView(dt) {
   const [x, y] = game.ball.p, vx = game.ball.v[0];
   const eye = [x + vx * 0.02, y - 3.2, 1.85], target = [x + vx * 0.08, y + 5, 0.4];
-  chaseEye = chaseEye ? lerp(chaseEye, eye, 0.22) : eye;
-  chaseTarget = chaseTarget ? lerp(chaseTarget, target, 0.22) : target;
+  const t = smoothFactor(0.22, dt);
+  chaseEye = chaseEye ? lerp(chaseEye, eye, t) : eye;
+  chaseTarget = chaseTarget ? lerp(chaseTarget, target, t) : target;
   return orbit(transformPoint(board, chaseEye), transformPoint(board, chaseTarget), transformPoint(board, [x, y, BALL_RADIUS]));
 }
 
@@ -671,8 +699,10 @@ function drawWall({ a, b, hidden }) {
   const angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
   draw(cubeMesh, multiply(translate((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, WALL_HEIGHT / 2),
     rotateZ(angle), scale(len / 2, WALL_THICK / 2, WALL_HEIGHT / 2)), MATERIALS.wall);
-  draw(cylinderMesh, post(a[0], a[1], WALL_THICK / 2, 0, WALL_HEIGHT), MATERIALS.wall);
-  draw(cylinderMesh, post(b[0], b[1], WALL_THICK / 2, 0, WALL_HEIGHT), MATERIALS.wall);
+}
+
+function drawWallPost([x, y]) {
+  draw(cylinderMesh, post(x, y, WALL_THICK / 2, 0, WALL_HEIGHT), MATERIALS.wall);
 }
 
 function drawBumper(bp) {
@@ -684,11 +714,12 @@ function drawBumper(bp) {
 }
 
 function drawFlipper(f) {
+  const mesh = getFlipperMesh(f);
   const worldAngle = f.side > 0 ? f.angle : Math.PI - f.angle;
   const frame = multiply(translate(f.pivot[0], f.pivot[1], 0), rotateZ(worldAngle));
   const h = FLIPPER_HEIGHT;
-  draw(flipperMesh, multiply(frame, scale(1, 1, 0.25)), MATERIALS.rubber);
-  draw(flipperMesh, multiply(frame, translate(0, 0, 0.25), scale(1, 1, h - 0.25)), MATERIALS.flipper, f.pressed ? 1.6 : 1);
+  draw(mesh, multiply(frame, scale(1, 1, 0.25)), MATERIALS.rubber);
+  draw(mesh, multiply(frame, translate(0, 0, 0.25), scale(1, 1, h - 0.25)), MATERIALS.flipper, f.pressed ? 1.6 : 1);
   draw(cylinderMesh, multiply(frame, post(0, 0, 0.22, h, 0.08)), MATERIALS.steel);
 }
 
@@ -709,6 +740,7 @@ function drawScene() {
   parent = board;
   table.fields.forEach(drawCabinet);
   table.walls.forEach(drawWall);
+  WALL_POSTS.forEach(drawWallPost);
   table.bumpers.forEach(drawBumper);
   table.flippers.forEach(drawFlipper);
   drawPlunger();
@@ -757,10 +789,28 @@ function drawMirror(camera, mirror) {
   gl.activeTexture(gl.TEXTURE0);
 }
 
-function updateTrail() {
-  if (game.state !== "play") trail.length = 0;
-  else trail.unshift([...game.ball.p]);
-  if (trail.length > TRAIL_LENGTH) trail.pop();
+let trailAccum = 0;
+const TRAIL_STEP = 1 / 60;
+
+function updateTrail(dt) {
+  if (game.state !== "play") {
+    trail.length = 0;
+    trailAccum = 0;
+    return;
+  }
+  trailAccum += dt;
+  if (trail.length === 0) {
+    trail.unshift([...game.ball.p]);
+    trailAccum = 0;
+    return;
+  }
+  while (trailAccum >= TRAIL_STEP) {
+    trailAccum -= TRAIL_STEP;
+    trail.unshift([...game.ball.p]);
+    if (trail.length > TRAIL_LENGTH) trail.pop();
+  }
+  trail[0][0] = game.ball.p[0];
+  trail[0][1] = game.ball.p[1];
 }
 
 function drawTrail(projection) {
@@ -825,19 +875,20 @@ function drawComposite() {
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
   if (canvas.width === w && canvas.height === h) return;
   canvas.width = w;
   canvas.height = h;
   resizeTargets(w, h);
 }
 
-function render(insets, ballCam, zoom, strength) {
+function render(dt, insets, ballCam, zoom, strength) {
   resize();
-  updatePalette();
-  updateTrail();
+  updatePalette(dt);
+  updateTrail(dt);
   const field = rect(table.fields[game.field]);
-  cameraRect = cameraRect ? lerp(cameraRect, field, 0.08) : field;
+  cameraRect = cameraRect ? lerp(cameraRect, field, smoothFactor(0.08, dt)) : field;
   const c = center(cameraRect);
   board = multiply(translate(c[0], c[1], 0), rotateY(game.tilt[0]), rotateX(-game.tilt[1]), translate(-c[0], -c[1], 0));
   const mirror = multiply(board, scale(1, 1, -1),
@@ -858,7 +909,7 @@ function render(insets, ballCam, zoom, strength) {
 
   let camera, projection;
   if (ballCam) {
-    camera = chaseView();
+    camera = chaseView(dt);
     projection = perspective(2 * Math.atan(Math.tan(65 * Math.PI / 360) / zoom), canvas.width / canvas.height, 0.2, 120);
   } else {
     chaseEye = chaseTarget = null;
