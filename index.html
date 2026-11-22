@@ -75,6 +75,63 @@
                                          box-shadow: 0 0 18px #39c6ff, 0 0 36px #0a6cff; }
     .zone.down .pad { transform: scale(0.96); }
     #touchLaunch.down { transform: translateX(-50%) scale(0.94); }
+    /* Conformal mapping controls */
+    #escherControls {
+        position: fixed;
+        top: max(60px, calc(env(safe-area-inset-top) + 50px));
+        right: 16px;
+        z-index: 12;
+        width: 260px;
+        box-sizing: border-box;
+        padding: 12px;
+        border: 1px solid rgba(80, 200, 255, 0.5);
+        border-radius: 12px;
+        background: rgba(2, 10, 26, 0.9);
+        box-shadow: 0 0 14px rgba(40, 160, 255, 0.3);
+        font: 12px system-ui, sans-serif;
+        max-height: 65dvh;
+        overflow-y: auto;
+    }
+
+    #escherControls summary {
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 14px;
+        color: #9fe6ff;
+    }
+
+    .escherRow {
+        display: grid;
+        grid-template-columns: 72px 1fr 38px;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+    }
+
+    .escherRow input {
+        width: 100%;
+        accent-color: #39c6ff;
+    }
+
+    .escherRow output {
+        color: #9fe6ff;
+        text-align: right;
+        font-family: monospace;
+    }
+
+    #escherReset {
+        margin-top: 14px;
+        padding: 6px 12px;
+        background: #0c1a30;
+        color: #dff6ff;
+        border: 1px solid #2f7fb8;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+
+    #escherEnabled {
+        accent-color: #39c6ff;
+    }
   </style>
 </head>
 
@@ -82,6 +139,61 @@
   <canvas id="glcanvas"></canvas>
   <div id="hud"></div>
   <button id="cameraBtn">🎥 Ball Cam (C)</button>
+
+
+  <details id="escherControls" open>
+      <summary>Conformal Mapping</summary>
+
+      <label style="display:block; margin-top:12px;">
+          <input type="checkbox" id="escherEnabled" checked>
+          Enable mapping
+      </label>
+
+      <div class="escherRow">
+          <label for="angle">Angle</label>
+          <input id="angle" type="range" min="-3.14" max="3.14" step="0.01" value="0.10">
+          <output>0.10</output>
+      </div>
+
+      <div class="escherRow">
+          <label for="arms">Arms</label>
+          <input id="arms" type="range" min="0.1" max="10" step="0.1" value="4">
+          <output>4.00</output>
+      </div>
+
+      <div class="escherRow">
+          <label for="strength">Strength</label>
+          <input id="strength" type="range" min="0" max="1" step="0.01" value="0.75">
+          <output>0.75</output>
+      </div>
+
+      <div class="escherRow">
+          <label for="repeat">Repeat</label>
+          <input id="repeat" type="range" min="1" max="15" step="0.1" value="5">
+          <output>5.00</output>
+      </div>
+
+      <div class="escherRow">
+          <label for="frameScale">Frame Scale</label>
+          <input id="frameScale" type="range" min="0.1" max="10" step="0.01" value="0.52">
+          <output>0.52</output>
+      </div>
+
+      <div class="escherRow">
+          <label for="pivotX">Pivot X</label>
+          <input id="pivotX" type="range" min="0" max="1" step="0.01" value="0.5">
+          <output>0.50</output>
+      </div>
+
+      <div class="escherRow">
+          <label for="pivotY">Pivot Y</label>
+          <input id="pivotY" type="range" min="0" max="1" step="0.01" value="0.5">
+          <output>0.50</output>
+      </div>
+
+      <button id="escherReset" type="button">Reset</button>
+  </details>
+
 
   <div id="controls">
     <div class="control"><kbd data-code="KeyZ">Z</kbd><kbd data-code="ArrowLeft">&larr;</kbd><span>Left flipper</span></div>
@@ -98,11 +210,57 @@
     <button id="touchLaunch">LAUNCH</button>
   </div>
 
+
+  <script>
+    const escherDefaults = {
+        angle: 0.10,
+        arms: 4.0,
+        strength: 0.75,
+        repeat: 5.0,
+        frameScale: 0.52,
+        pivotX: 0.5,
+        pivotY: 0.5
+    };
+
+    window.escherParams = {
+        ...escherDefaults,
+        enabled: true
+    };
+
+    const panel = document.getElementById("escherControls");
+
+    //Update shader parameters when sliders move.
+    panel.querySelectorAll('input[type="range"]').forEach(input => {
+        input.addEventListener("input", () => {
+            window.escherParams[input.id] = Number(input.value);
+            input.nextElementSibling.textContent =
+                Number(input.value).toFixed(2);
+        });
+    });
+
+    //Enable/disable mapping.
+    document.getElementById("escherEnabled").addEventListener("change", e => {
+        window.escherParams.enabled = e.target.checked;
+    });
+
+    //Reset all controls.
+    document.getElementById("escherReset").addEventListener("click", () => {
+        Object.assign(window.escherParams, escherDefaults);
+        window.escherParams.enabled = true;
+        document.getElementById("escherEnabled").checked = true;
+
+        panel.querySelectorAll('input[type="range"]').forEach(input => {
+            input.value = escherDefaults[input.id];
+            input.nextElementSibling.textContent =
+                Number(input.value).toFixed(2);
+        });
+    });
+  </script>
+
   <script src="transforms.js"></script>
   <script src="models.js"></script>
   <script src="physics.js"></script>
   <script src="render.js"></script>
-  <script src="i_math.js"></script>
   <script src="main.js"></script>
  
 
