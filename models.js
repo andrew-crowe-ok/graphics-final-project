@@ -62,6 +62,28 @@ function createCylinder(segments, uRepeat = 3) {
   return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
 }
 
+function createTorus(segments, sides, tube) {
+  const pos = [], nrm = [], tex = [], idx = [];
+
+  for (let i = 0; i <= segments; i++) {
+    const u = i / segments, a = u * Math.PI * 2, s = Math.sin(a), c = Math.cos(a);
+    for (let j = 0; j <= sides; j++) {
+      const v = j / sides, b = v * Math.PI * 2, r = 1 + tube * Math.cos(b), y = tube * Math.sin(b);
+      pos.push(s * r, y, c * r);
+      nrm.push(s * Math.cos(b), Math.sin(b), c * Math.cos(b));
+      tex.push(u, v);
+    }
+  }
+  for (let i = 0; i < segments; i++) {
+    for (let j = 0; j < sides; j++) {
+      const a = i * (sides + 1) + j, b = a + sides + 1;
+      idx.push(a, b, b + 1, a, b + 1, a + 1);
+    }
+  }
+
+  return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
+}
+
 function createSphere(segments) {
   const pos = [], nrm = [], tex = [], idx = [];
 
@@ -102,7 +124,7 @@ function createFlipper(length, radius, segments) {
   });
   for (let i = 0; i + 1 < rim.length; i++) {
     const b = i * 2;
-    idx.push(b, b + 2, b + 3, b, b + 3, b + 1);
+    idx.push(b, b + 1, b + 3, b, b + 3, b + 2);
   }
 
   for (const z of [1, 0]) {
@@ -116,7 +138,11 @@ function createFlipper(length, radius, segments) {
       nrm.push(0, 0, 2 * z - 1);
       tex.push((x + radius) / (length + 2 * radius), (y + radius) / (2 * radius));
     }
-    for (let i = 0; i + 1 < rim.length; i++) idx.push(center, center + 1 + i, center + 2 + i);
+    for (let i = 0; i + 1 < rim.length; i++) {
+      const a = center + 1 + i, b = a + 1;
+      if (z > 0) idx.push(center, b, a);
+      else idx.push(center, a, b);
+    }
   }
 
   return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
