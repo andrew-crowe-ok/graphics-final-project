@@ -179,9 +179,12 @@ function measureInsets() {
 }
 window.addEventListener("resize", measureInsets);
 
+const escherControls = document.getElementById("escherControls");
+
 function setTouchMode(on) {
   if (document.body.classList.contains("touch") === on) return;
   document.body.classList.toggle("touch", on);
+  if (escherControls) escherControls.open = !on;
   measureInsets();
 }
 
@@ -194,6 +197,7 @@ function updateHud() {
 }
 
 document.body.classList.toggle("touch", matchMedia("(pointer: coarse)").matches);
+if (escherControls) escherControls.open = !document.body.classList.contains("touch");
 newGame();
 updateHud();
 measureInsets();

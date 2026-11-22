@@ -96,6 +96,7 @@
 
       overflow-y: auto;
       overflow-x: hidden;
+      pointer-events: none;
       touch-action: pan-y;
       scrollbar-width: thin;
     }
@@ -105,6 +106,7 @@
       flex-shrink: 0;
       max-width: 100%;
       box-sizing: border-box;
+      pointer-events: auto;
     }
 
     /* -----------------------------------------
@@ -384,7 +386,7 @@
       transform: translateX(-50%) scale(0.94);
     }
 
-    /* Move Conformal Mapping to bottom right */
+    /* Move Conformal Mapping to bottom right on desktop; dock & collapse in touch mode */
     #uiDock > #escherControls {
         position: fixed;
         top: auto;
@@ -398,6 +400,17 @@
 
         overflow-y: auto;
         z-index: 12;
+    }
+
+    body.touch #uiDock > #escherControls {
+        position: static;
+        width: 280px;
+        max-width: 100%;
+        max-height: none;
+    }
+
+    body.touch #uiDock > #escherControls:not([open]) {
+        width: auto;
     }
   </style>
 </head>
@@ -605,49 +618,6 @@
     </form>
 
   </dialog>
-
-  <!-- =======================================
-       KEYBOARD CONTROL HINTS
-       ======================================= -->
-
-  <div id="controls">
-
-    <div class="control">
-      <kbd data-code="KeyZ">Z</kbd>
-      <kbd data-code="ArrowLeft">&larr;</kbd>
-      <span>Left flipper</span>
-    </div>
-
-    <div class="control">
-      <kbd class="wide" data-code="Space">Space</kbd>
-      <span>Hold to launch</span>
-    </div>
-
-    <div class="control">
-      <span>Right flipper</span>
-      <kbd data-code="Slash">/</kbd>
-      <kbd data-code="ArrowRight">&rarr;</kbd>
-    </div>
-
-    <div class="control">
-      <kbd data-code="KeyC">C</kbd>
-      <span>Camera</span>
-    </div>
-
-    <div class="control">
-      <kbd data-code="KeyW">W</kbd>
-      <kbd data-code="KeyA">A</kbd>
-      <kbd data-code="KeyS">S</kbd>
-      <kbd data-code="KeyD">D</kbd>
-      <span>Tilt</span>
-    </div>
-
-    <div class="control">
-      <kbd class="wide">Scroll</kbd>
-      <span>Zoom</span>
-    </div>
-
-  </div>
 
   <!-- =======================================
        TOUCH INPUT
