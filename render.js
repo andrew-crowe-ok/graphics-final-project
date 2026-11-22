@@ -686,7 +686,7 @@ void main() {
 }
 `;
 
-const SKY_FRAGMENT_SHADER = `#version 300 es
+const SKY_FRAGMENT_SHADER2 = `#version 300 es
 precision highp float;
 
 const float STAR_BRIGHTNESS = 4.0;
@@ -911,8 +911,28 @@ const uLightMVP = gl.getUniformLocation(shadowProgram, "uLightMVP");
 const trailProgram = createProgram(TRAIL_VERTEX_SHADER, TRAIL_FRAGMENT_SHADER);
 const trailUniforms = getUniforms(trailProgram, ["uModelView", "uProjection", "uColor"]);
 
-const skyProgram = createProgram(SKY_VERTEX_SHADER, SKY_FRAGMENT_SHADER);
-const skyUniforms = getUniforms(skyProgram, ["uView", "uProjection", "uFogColor", "uSkyColor", "uGridColor", "uTime", "uStarScale"]);
+
+//Original procedural sky
+const skyProgram = createProgram(
+    SKY_VERTEX_SHADER,
+    SKY_FRAGMENT_SHADER2
+);
+
+const skyUniforms = getUniforms(skyProgram, [
+    "uView", "uProjection", "uFogColor",
+    "uSkyColor", "uGridColor", "uTime", "uStarScale"
+]);
+
+//Conformally transformed sky texture
+const textureSkyProgram = createProgram(
+    POST_VERTEX_SHADER,
+    SKY_FRAGMENT_SHADER
+);
+
+const textureSkyUniforms = getUniforms(
+    textureSkyProgram,
+    ["uSky"]
+);
 
 const blurProgram = createProgram(POST_VERTEX_SHADER, BLUR_FRAGMENT_SHADER);
 const blurUniforms = getUniforms(blurProgram, ["uImage", "uStep", "uThreshold"]);
@@ -922,15 +942,6 @@ gl.uniform1i(blurUniforms.uImage, 0);
 const compositeProgram = createProgram(POST_VERTEX_SHADER, COMPOSITE_FRAGMENT_SHADER);
 const compositeUniforms = getUniforms(compositeProgram, ["uScene", "uBloom0", "uBloom1", "uBloom2", "uBloom3", "uBloomStrength"]);
 
-//sky
-const skyProgram = createProgram(
-    POST_VERTEX_SHADER,
-    SKY_FRAGMENT_SHADER
-);
-
-const skyUniforms = getUniforms(skyProgram, ["uSky"]);
-
-const compositeUniforms = getUniforms(compositeProgram, ["uScene", "uBloom0", "uBloom1", "uBloom2", "uBloom3"]);
 gl.useProgram(compositeProgram);
 ["uScene", "uBloom0", "uBloom1", "uBloom2", "uBloom3"].forEach((name, i) => gl.uniform1i(compositeUniforms[name], i));
 gl.uniform1f(compositeUniforms.uBloomStrength, 0.35);
@@ -1354,7 +1365,7 @@ function drawWorld() {
 
 let skyTime = 0;
 
-function drawSky(projection, starScale = STAR_SCALE) {
+function drawSky2(projection, starScale = STAR_SCALE) {
   gl.useProgram(skyProgram);
   gl.uniformMatrix4fv(skyUniforms.uView, false, view);
   gl.uniformMatrix4fv(skyUniforms.uProjection, false, projection);
@@ -1403,7 +1414,7 @@ function drawEnvironment() {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + i, environmentMap, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     setView(lookAt(eye, add(eye, dir), up), NO_CLIP);
-    drawSky(projection, ENVIRONMENT_STAR_SCALE);
+    drawSky2(projection, ENVIRONMENT_STAR_SCALE);
     drawScene(false);
   });
   gl.activeTexture(gl.TEXTURE6);
@@ -1421,7 +1432,7 @@ function drawMirror(camera, mirror, projection) {
   gl.bindTexture(gl.TEXTURE_2D, null);
   gl.activeTexture(gl.TEXTURE0);
   setView(multiply(camera, mirror), [-n[0], -n[1], -n[2], n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - 0.01]);
-  drawSky(projection);
+  drawSky2(projection);
   drawScene();
   drawWorld();
   gl.activeTexture(gl.TEXTURE3);
@@ -1532,12 +1543,12 @@ function drawSky(texture) {
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(false);
 
-    gl.useProgram(skyProgram);
+    gl.useProgram(textureSkyProgram);
 
     //Use the conformally transformed screen as the sky texture.
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.uniform1i(skyUniforms.uSky, 0);
+    gl.uniform1i(textureSkyUniforms.uSky, 0);
 
     //Draw fullscreen triangle.
     gl.bindVertexArray(null);
@@ -1621,11 +1632,14 @@ function render(dt, insets, ballCam, zoom, strength, dev = {}) {
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   setView(camera, NO_CLIP);
-  drawSky(projection);
 
   //Render the previous frame's transformed screen as the sky.
   if (window.escherParams.enabled && conformalSky) {
     drawSky(conformalSky);
+  }
+  else{
+    drawSky2(projection);
+
   }
 
   drawScene();
@@ -1637,8 +1651,6 @@ function render(dt, insets, ballCam, zoom, strength, dev = {}) {
   gl.bindVertexArray(null);
   if (bloomOn) drawBloom();
   drawComposite(bloomOn);
-  drawBloom();
-  drawComposite();
 
   const p = window.escherParams;
 
@@ -1652,10 +1664,9 @@ function render(dt, insets, ballCam, zoom, strength, dev = {}) {
           pivot: [p.pivotX, p.pivotY],
           show: false
       });
+  } else {
+      conformalSky = null;
   }
-
-
-
 
   gl.enable(gl.DEPTH_TEST);
 }
