@@ -27,8 +27,10 @@ const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
 const int NO_MAPPING = 0, EMISSION_MAPPING = 1, FLOOR_MAPPING = 2;
+const int CIRCUIT_FLOOR = 0, CONFORMAL_FLOOR = 1, PLAIN_FLOOR = 2;
 const int MAX_ARROWS = 32;
 const float ARROW_FLASH = 8.0, ARROW_HALO = 0.6;
+const float CONFORMAL_GAIN = 0.8, PLAIN_GRAY = 128.0 / 255.0;
 const float Ka = 1.6;
 const float Kd = 0.6;
 const float FOG_START = 22.0, FOG_DENSITY = 0.02;
@@ -71,6 +73,7 @@ uniform sampler2D uReflection;
 uniform samplerCube uEnvironment;
 uniform highp sampler2DShadow uShadowMap;
 uniform int uMapping;
+uniform int uFloorStyle;
 
 out vec4 fragColor;
 
@@ -93,11 +96,23 @@ float arrowGlowAt(vec2 p) {
   return glow;
 }
 
+vec2 floorUv(vec2 uv, vec4 rect) {
+  if (uFloorStyle == CIRCUIT_FLOOR) return uv;
+  vec2 size = rect.zw - rect.xy;
+  return 0.5 + (uv - 0.5) * vec2(size.x / size.y * uScreenSize.y / uScreenSize.x, 1.0);
+}
+
+vec3 floorEmission(vec3 texel) {
+  if (uFloorStyle == CONFORMAL_FLOOR) return CONFORMAL_GAIN * texel;
+  if (uFloorStyle == PLAIN_FLOOR) return uFloorEmissive * PLAIN_GRAY;
+  return uFloorEmissive * texel;
+}
+
 vec3 sampleField(int idx, vec2 uv, vec2 p, float lod) {
   vec3 texel = idx == 0 ? textureLod(uFloorTex0, uv, lod).rgb
              : idx == 1 ? textureLod(uFloorTex1, uv, lod).rgb
                         : textureLod(uFloorTex2, uv, lod).rgb;
-  vec3 emission = uFloorEmissive * texel;
+  vec3 emission = floorEmission(texel);
   float glow = arrowGlowAt(p);
   return emission * (1.0 + ARROW_FLASH * glow) + ARROW_HALO * glow * uFloorEmissive;
 }
@@ -117,7 +132,7 @@ vec3 playfield(vec3 R) {
     vec4 r = uFloorRects[i];
     if (all(greaterThanEqual(p, r.xy)) && all(lessThanEqual(p, r.zw))) {
       vec2 uv = (p - r.xy) / (r.zw - r.xy);
-      return mix(uFogColor, sampleField(i, uv, p, lod), atten);
+      return mix(uFogColor, sampleField(i, floorUv(uv, r), p, lod), atten);
     }
   }
   return vec3(0.01);
@@ -151,9 +166,11 @@ void main() {
   if (uReflectivity > 0.0)
     result += schlick(uReflectivity, N, V) * environment(reflect(-V, N));
 
-  vec3 texel = texture(uTexture, vTexCoord).rgb;
+  vec2 uv = uMapping == FLOOR_MAPPING ? floorUv(vTexCoord, uFloorRect) : vTexCoord;
+  vec3 texel = texture(uTexture, uv).rgb;
   vec3 emission = uMapping == NO_MAPPING ? uEmissive : uEmissive * texel;
   if (uMapping == FLOOR_MAPPING) {
+    emission = floorEmission(texel);
     float glow = arrowGlowAt(mix(uFloorRect.xy, uFloorRect.zw, vTexCoord));
     emission = emission * (1.0 + ARROW_FLASH * glow) + ARROW_HALO * glow * uEmissive;
   }
@@ -804,6 +821,7 @@ void main() {
 `;
 
 const NO_MAPPING = 0, EMISSION_MAPPING = 1, FLOOR_MAPPING = 2;
+const CIRCUIT_FLOOR = 0, CONFORMAL_FLOOR = 1, PLAIN_FLOOR = 2;
 
 const LIGHTS = [
   { pos: [-22, 8, 22], color: [0.55, 0.65, 0.85] },
@@ -895,7 +913,7 @@ const uniforms = getUniforms(program, ["uModelView", "uProjection", "uShadowMatr
   "uLightColor", "uUp", "uFogColor", "uColor", "uEmissive", "uTopEmissive", "uKs", "uShininess",
   "uReflectivity", "uMirror", "uShade", "uMapping", "uTexture", "uShadowMap", "uBoardOrigin", "uBoardX", "uBoardY",
   "uFloorNormal", "uFloorRects", "uFloorEmissive", "uFloorTex0", "uFloorTex1", "uFloorTex2", "uClipPlane",
-  "uScreenSize", "uReflection", "uFloorRect", "uArrows", "uView", "uEnvironment"]);
+  "uScreenSize", "uReflection", "uFloorRect", "uArrows", "uView", "uEnvironment", "uFloorStyle"]);
 gl.useProgram(program);
 gl.uniform1i(uniforms.uTexture, 0);
 gl.uniform1i(uniforms.uShadowMap, 1);
@@ -1562,11 +1580,13 @@ function drawSky(texture) {
 
 let conformalSky = null;
 
-function render(dt, insets, ballCam, zoom, strength, dev = {}) {
+function render(dt, insets, ballCam, zoom, dev = {}) {
   const bloomOn = dev.bloom ?? true;
   const trailOn = dev.trail ?? true;
   const shadowsOn = dev.shadows ?? true;
   const paletteOverride = dev.palette ?? -1;
+  const strength = dev.mirror ?? 0.3;
+  const floorStyle = dev.floor ?? PLAIN_FLOOR;
   const simDt = dev.simDt ?? dt;
 
   resize();
@@ -1613,12 +1633,16 @@ function render(dt, insets, ballCam, zoom, strength, dev = {}) {
   gl.uniform3fv(uniforms.uFogColor, palette.fog);
   gl.uniform3fv(uniforms.uFloorEmissive, palette.insert);
   gl.uniform3fv(uniforms.uArrows, table.arrows.flatMap(a => [a.p[0], a.p[1], a.lit / ARROW_LIT]));
+  const style = floorStyle === CONFORMAL_FLOOR && conformalSky === null ? CIRCUIT_FLOOR : floorStyle;
+  const floorTextures = style === CONFORMAL_FLOOR ? fieldTextures.map(() => conformalSky) : fieldTextures;
+  fieldMaterials.forEach((mat, i) => { mat.texture = floorTextures[i]; });
+  gl.uniform1i(uniforms.uFloorStyle, style);
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[0]);
+  gl.bindTexture(gl.TEXTURE_2D, floorTextures[0]);
   gl.activeTexture(gl.TEXTURE4);
-  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[1]);
+  gl.bindTexture(gl.TEXTURE_2D, floorTextures[1]);
   gl.activeTexture(gl.TEXTURE5);
-  gl.bindTexture(gl.TEXTURE_2D, fieldTextures[2]);
+  gl.bindTexture(gl.TEXTURE_2D, floorTextures[2]);
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, shadowMap);
   gl.activeTexture(gl.TEXTURE0);
@@ -1654,7 +1678,7 @@ function render(dt, insets, ballCam, zoom, strength, dev = {}) {
 
   const p = window.escherParams;
 
-  if (p.enabled) {
+  if (p.enabled || floorStyle === CONFORMAL_FLOOR) {
       conformalSky = applyEscherGPU({
           angle: p.angle,
           arms: p.arms,
