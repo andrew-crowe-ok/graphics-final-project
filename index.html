@@ -323,7 +323,7 @@
       right: 0;
     }
 
-    .pad, #touchLaunch {
+    .pad, #touchLaunch, #touchTilt {
       position: absolute;
       bottom: calc(16px + env(safe-area-inset-bottom));
 
@@ -364,19 +364,88 @@
       right: calc(12px + env(safe-area-inset-right));
     }
 
-    #touchLaunch {
+    #touchLaunch, #touchTilt {
       left: 50%;
       transform: translateX(-50%);
       z-index: 1;
 
+      box-sizing: border-box;
       width: 104px;
       height: 104px;
       border-radius: 50%;
       padding: 0;
-      font-size: 16px;
 
       touch-action: none;
+    }
+
+    #touchLaunch {
+      font-size: 16px;
       cursor: pointer;
+    }
+
+    #touchTilt {
+      cursor: grab;
+    }
+
+    #touchTilt.down {
+      cursor: grabbing;
+      border-color: rgba(120, 220, 255, 0.9);
+      box-shadow:
+        0 0 18px rgba(57, 198, 255, 0.55),
+        inset 0 0 14px rgba(57, 198, 255, 0.3);
+    }
+
+    .tilt-arrow {
+      position: absolute;
+      font-size: 8px;
+      line-height: 1;
+      color: rgba(159, 230, 255, 0.45);
+      text-shadow: none;
+      pointer-events: none;
+    }
+
+    .tilt-arrow.up { top: 6px; left: 50%; transform: translateX(-50%); }
+    .tilt-arrow.down { bottom: 6px; left: 50%; transform: translateX(-50%); }
+    .tilt-arrow.left { left: 6px; top: 50%; transform: translateY(-50%); }
+    .tilt-arrow.right { right: 6px; top: 50%; transform: translateY(-50%); }
+
+    #touchTiltKnob {
+      box-sizing: border-box;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      font: 700 11px system-ui, sans-serif;
+      letter-spacing: 0.08em;
+      color: #dff6ff;
+      text-shadow: 0 0 6px #39c6ff;
+
+      background: rgba(16, 48, 92, 0.85);
+      border: 2px solid rgba(120, 215, 255, 0.85);
+      box-shadow:
+        0 0 10px rgba(57, 198, 255, 0.45),
+        inset 0 0 8px rgba(57, 198, 255, 0.25);
+
+      pointer-events: none;
+      transition: transform 0.1s ease-out, background 0.05s, box-shadow 0.05s;
+    }
+
+    #touchTilt.down #touchTiltKnob {
+      background: rgba(57, 198, 255, 0.9);
+      border-color: #dff6ff;
+      color: #02060f;
+      text-shadow: none;
+      box-shadow: 0 0 16px #39c6ff, 0 0 28px #0a6cff;
+      transition: background 0.05s, box-shadow 0.05s;
+    }
+
+    #touch.playing #touchLaunch,
+    #touch:not(.playing) #touchTilt {
+      display: none;
     }
 
     .zone.down .pad,
@@ -714,6 +783,9 @@
 
       <dt>LAUNCH</dt>
       <dd>Hold to charge, release to launch</dd>
+
+      <dt>TILT stick</dt>
+      <dd>Drag to tilt the table while playing</dd>
     </dl>
 
     <form method="dialog">
@@ -737,6 +809,14 @@
     </div>
 
     <button id="touchLaunch">LAUNCH</button>
+
+    <div id="touchTilt" aria-label="Tilt table">
+      <span class="tilt-arrow up">&#9650;</span>
+      <span class="tilt-arrow down">&#9660;</span>
+      <span class="tilt-arrow left">&#9664;</span>
+      <span class="tilt-arrow right">&#9654;</span>
+      <div id="touchTiltKnob">TILT</div>
+    </div>
 
   </div>
 
