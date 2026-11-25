@@ -119,12 +119,18 @@ const CAMERAS = [
 ];
 let cameraIndex = 0;
 const cameraBtn = document.getElementById("cameraBtn");
+function updateCameraLabel() {
+  const nextName = CAMERAS[(cameraIndex + 1) % CAMERAS.length].name;
+  cameraBtn.textContent = document.body.classList.contains("touch")
+    ? `🎥 ${nextName.replace(/ Cam$/, "")}`
+    : `${nextName} (C)`;
+}
 function setCamera(i) {
   cameraIndex = i;
   orbitYaw = CAMERAS[i].yaw;
   orbitPitch = CAMERAS[i].pitch;
   zoom = CAMERAS[i].zoom;
-  cameraBtn.textContent = `${CAMERAS[(i + 1) % CAMERAS.length].name} (C)`;
+  updateCameraLabel();
 }
 function toggleCamera() {
   setCamera((cameraIndex + 1) % CAMERAS.length);
@@ -157,7 +163,7 @@ canvas.addEventListener("dblclick", () => setCamera(cameraIndex));
 let screenInsets = { top: 0, bottom: 0 };
 
 function measureInsets() {
-  const rects = [...document.querySelectorAll("#hud, .setting, #helpBtn, #cameraBtn, .pad, #touchLaunch")]
+  const rects = [...document.querySelectorAll("#hud, #cameraRow, body:not(.touch) .setting, body:not(.touch) #helpBtn, #cameraBtn, .pad, #touchLaunch")]
     .map(el => el.getBoundingClientRect()).filter(r => r.height > 0);
   const h = window.innerHeight;
   const padsBeside = document.body.classList.contains("touch") && window.innerWidth > h;
@@ -168,12 +174,60 @@ function measureInsets() {
 }
 window.addEventListener("resize", measureInsets);
 
+const uiDock = document.getElementById("uiDock");
+const cameraRow = document.getElementById("cameraRow");
+const settingsDrawer = document.getElementById("settingsDrawer");
+const settingsBtn = document.getElementById("settingsBtn");
 const escherControls = document.getElementById("escherControls");
+
+function updateDevLabel() {
+  const btn = document.getElementById("devBtn");
+  if (!btn) return;
+  const touch = document.body.classList.contains("touch");
+  btn.textContent = touch ? "🛠 Dev" : "🛠 Dev (`)";
+  btn.classList.toggle("active", touch && typeof devTools !== "undefined" && devTools.state.open);
+}
+
+function syncMobileControls() {
+  const touch = document.body.classList.contains("touch");
+  if (touch) {
+    cameraRow.insertBefore(cameraBtn, settingsBtn);
+  } else if (cameraBtn.parentElement !== settingsDrawer) {
+    settingsDrawer.insertBefore(cameraBtn, escherControls);
+  }
+  if (escherControls) escherControls.open = !touch;
+  updateCameraLabel();
+  updateDevLabel();
+}
+
+function setSettingsOpen(open) {
+  uiDock.classList.toggle("settings-open", open);
+  settingsBtn.classList.toggle("active", open);
+  settingsBtn.setAttribute("aria-expanded", String(open));
+  if (open && typeof devTools !== "undefined" && devTools.state.open) {
+    devTools.toggle(false);
+  }
+  updateDevLabel();
+}
+
+settingsBtn.addEventListener("click", () => {
+  setSettingsOpen(!uiDock.classList.contains("settings-open"));
+  settingsBtn.blur();
+});
+
+document.getElementById("devBtn")?.addEventListener("click", () => {
+  if (typeof devTools !== "undefined" && devTools.state.open) {
+    setSettingsOpen(false);
+  } else {
+    updateDevLabel();
+  }
+});
 
 function setTouchMode(on) {
   if (document.body.classList.contains("touch") === on) return;
   document.body.classList.toggle("touch", on);
-  if (escherControls) escherControls.open = !on;
+  setSettingsOpen(false);
+  syncMobileControls();
   measureInsets();
 }
 
@@ -186,7 +240,7 @@ function updateHud() {
 }
 
 document.body.classList.toggle("touch", matchMedia("(pointer: coarse)").matches);
-if (escherControls) escherControls.open = !document.body.classList.contains("touch");
+syncMobileControls();
 newGame();
 updateHud();
 measureInsets();
