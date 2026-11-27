@@ -6,13 +6,9 @@ A 3D neon pinball table in WebGL 2, built for CS 412.
 
 ## Code layout
 
-| File | Contents |
-| --- | --- |
-| `physics.js` | Table geometry, collision, flippers, plunger, scoring. Owns all game state. |
-| `render.js` | Shaders, render passes, materials, camera. Read-only view of the physics state. |
-| `models.js` | Procedural meshes: cube, cylinder, sphere, flipper |
-| `transforms.js` | Column-major 4×4 matrix library |
-| `main.js` | Input, HUD, frame loop |
+The application is organized as native JavaScript modules with standalone GLSL shader files; no build step is required. See [docs/architecture.md](docs/architecture.md) for the module map, responsibilities, dependency rules, startup flow, and shader workflow.
+
+To run locally, serve this directory over HTTP (ES modules and shader fetches do not work from `file://`), then open the local address in a WebGL 2-capable browser.
 
 Physics is 2D circle/segment collision with substepping; flippers transfer their surface velocity on contact. The table is three stacked playfields joined by gated flipper pairs.
 

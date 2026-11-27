@@ -1,3 +1,7 @@
+import { identity } from "../math/mat4.js";
+import { game, resetBall } from "../game/physics.js";
+import { PLAIN_FLOOR, resetRenderTracking } from "../render/renderer.js";
+
 const devTools = (() => {
   const DROP_POINTS = [[9.2, 29], [9.2, 60.8], [9.2, 72]];
   const state = {
@@ -13,48 +17,6 @@ const devTools = (() => {
     floor: PLAIN_FLOOR,
   };
 
-  const style = document.createElement("style");
-  style.textContent = `
-    #devBtn {
-      position: fixed; top: calc(max(12px, env(safe-area-inset-top)) + 118px); right: 136px; z-index: 10;
-      padding: 5px 14px; font: 600 13px system-ui, sans-serif; color: #9fe6ff; cursor: pointer;
-      text-shadow: 0 0 6px #39c6ff; touch-action: manipulation;
-      background: rgba(2, 10, 26, 0.85); border: 1px solid rgba(80, 200, 255, 0.6); border-radius: 20px;
-      box-shadow: 0 0 10px rgba(40, 160, 255, 0.45), inset 0 0 8px rgba(40, 160, 255, 0.25);
-    }
-    #devPanel {
-      display: none; position: fixed; top: calc(max(12px, env(safe-area-inset-top)) + 154px); right: 16px;
-      z-index: 10; width: 252px; padding: 10px 12px; border-radius: 14px; box-sizing: border-box;
-      font: 600 12px system-ui, sans-serif; color: #dff6ff;
-      background: rgba(2, 10, 26, 0.92); border: 1px solid rgba(80, 200, 255, 0.55);
-      box-shadow: 0 0 16px rgba(20, 120, 255, 0.35), inset 0 0 10px rgba(40, 160, 255, 0.18);
-    }
-    #devPanel.open { display: flex; flex-direction: column; gap: 8px; }
-    .dev-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-    .dev-row input[type="range"] { flex: 1; accent-color: #39c6ff; touch-action: auto; }
-    .dev-row output { min-width: 3.1em; text-align: right; font-family: monospace; color: #9fe6ff; }
-    .dev-btns { display: flex; gap: 5px; flex-wrap: wrap; }
-    .dev-btns button {
-      flex: 1; min-width: 44px; padding: 4px 6px; font: 600 11px system-ui, sans-serif;
-      color: #dff6ff; cursor: pointer; touch-action: manipulation; background: rgba(12, 28, 56, 0.9);
-      border: 1px solid rgba(80, 200, 255, 0.45); border-radius: 8px;
-    }
-    .dev-btns button.active { background: #39c6ff; color: #02060f; border-color: #39c6ff; }
-    .dev-swatches { display: flex; gap: 6px; }
-    .dev-swatches button {
-      width: 48px; height: 30px; padding: 0; cursor: pointer; touch-action: manipulation; opacity: 0.55;
-      background: center / cover; border: 1px solid rgba(80, 200, 255, 0.3); border-radius: 6px;
-    }
-    .dev-swatches button.active { opacity: 1; border-color: #9fe6ff; box-shadow: 0 0 8px #39c6ff; }
-    .dev-checks { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: #a9d6f0; }
-    .dev-checks label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
-    .dev-checks input { accent-color: #39c6ff; margin: 0; }
-    #devStats {
-      font: 500 11px/1.4 monospace; color: #9fe6ff; white-space: pre;
-      padding-top: 6px; border-top: 1px solid rgba(80, 200, 255, 0.25);
-    }
-  `;
-  document.head.appendChild(style);
 
   const btn = document.createElement("button");
   btn.id = "devBtn";
@@ -107,6 +69,7 @@ const devTools = (() => {
   `;
 
   document.body.append(btn, panel);
+  document.getElementById("cameraRow").appendChild(btn);
 
   const speedInput = panel.querySelector("#devSpeed");
   const speedOutput = panel.querySelector("#devSpeedValue");
@@ -159,9 +122,7 @@ const devTools = (() => {
       game.field = i;
       game.state = "play";
     }
-    if (typeof trail !== "undefined") trail.length = 0;
-    if (typeof chaseEye !== "undefined") chaseEye = null;
-    if (typeof chaseTarget !== "undefined") chaseTarget = null;
+    resetRenderTracking();
   }
 
   btn.addEventListener("click", () => toggle());
@@ -251,3 +212,5 @@ const devTools = (() => {
     },
   };
 })();
+
+export { devTools };

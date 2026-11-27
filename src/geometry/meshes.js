@@ -1,4 +1,4 @@
-function createCube() {
+export function createCube() {
   const positions = new Float32Array([
     -1, -1,  1,   1, -1,  1,   1,  1,  1,  -1,  1,  1,   // front
      1, -1, -1,  -1, -1, -1,  -1,  1, -1,   1,  1, -1,   // back
@@ -23,7 +23,7 @@ function createCube() {
   return { positions, normals, texCoords, indices };
 }
 
-function createCylinder(segments, uRepeat = 3) {
+export function createCylinder(segments, uRepeat = 3) {
   const pos = [], nrm = [], tex = [], idx = [];
 
   // Side
@@ -62,7 +62,7 @@ function createCylinder(segments, uRepeat = 3) {
   return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
 }
 
-function createTorus(segments, sides, tube) {
+export function createTorus(segments, sides, tube) {
   const pos = [], nrm = [], tex = [], idx = [];
 
   for (let i = 0; i <= segments; i++) {
@@ -84,7 +84,7 @@ function createTorus(segments, sides, tube) {
   return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
 }
 
-function createSphere(segments) {
+export function createSphere(segments) {
   const pos = [], nrm = [], tex = [], idx = [];
 
   for (let i = 0; i <= segments; i++) {
@@ -107,7 +107,7 @@ function createSphere(segments) {
   return { positions: new Float32Array(pos), normals: new Float32Array(nrm), texCoords: new Float32Array(tex), indices: new Uint16Array(idx) };
 }
 
-function createFlipper(length, radius, segments) {
+export function createFlipper(length, radius, segments) {
   const pos = [], nrm = [], tex = [], idx = [];
   const rim = [];
   for (let i = 0; i <= segments; i++) rim.push([length, Math.PI / 2 - Math.PI * i / segments]);

@@ -1,187 +1,43 @@
-const VERTEX_SHADER = `#version 300 es
-in vec3 aPosition;
-in vec3 aNormal;
-in vec2 aTexCoord;
+import {
+  frustum, identity, lookAt, multiply, ortho, perspective, rotateX, rotateY, rotateZ,
+  scale, transformDirection, transformPoint, translate,
+} from "../math/mat4.js";
+import {
+  createCube, createCylinder, createFlipper, createSphere, createTorus,
+} from "../geometry/meshes.js";
+import { game } from "../game/physics.js";
+import { ARROW_LIT, BALL_RADIUS, GATE_HALF, LAUNCH_FLASH, LANE_X, table } from "../game/table.js";
+import { createEscherPass } from "./passes/escher.js";
 
-uniform mat4 uModelView;
-uniform mat4 uProjection;
-uniform mat4 uShadowMatrix;
-uniform vec2 uTexRepeat;
+const SHADER_FILES = {
+  VERTEX_SHADER: "scene.vert.glsl",
+  FRAGMENT_SHADER: "scene.frag.glsl",
+  ESCHER_VERTEX_SHADER: "escher.vert.glsl",
+  ESCHER_FRAGMENT_SHADER: "escher.frag.glsl",
+  SHADOW_VERTEX_SHADER: "shadow.vert.glsl",
+  SHADOW_FRAGMENT_SHADER: "shadow.frag.glsl",
+  TRAIL_VERTEX_SHADER: "trail.vert.glsl",
+  TRAIL_FRAGMENT_SHADER: "trail.frag.glsl",
+  SKY_VERTEX_SHADER: "sky.vert.glsl",
+  SKY_FRAGMENT_SHADER2: "sky.frag.glsl",
+  POST_VERTEX_SHADER: "fullscreen.vert.glsl",
+  SKY_FRAGMENT_SHADER: "sky-texture.frag.glsl",
+  BLUR_FRAGMENT_SHADER: "blur.frag.glsl",
+  COMPOSITE_FRAGMENT_SHADER: "composite.frag.glsl",
+};
 
-out vec3 vPosition;
-out vec3 vNormal;
-out vec2 vTexCoord;
-out vec3 vShadowCoord;
+const shaderSources = Object.fromEntries(await Promise.all(
+  Object.entries(SHADER_FILES).map(async ([name, path]) => {
+    const url = new URL(`./shaders/${path}`, import.meta.url);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to load shader ${url}: ${response.status}`);
+    return [name, await response.text()];
+  }),
+));
 
-void main() {
-  vec4 p = uModelView * vec4(aPosition, 1.0);
-  vPosition = p.xyz;
-  vNormal = transpose(inverse(mat3(uModelView))) * aNormal;
-  vTexCoord = aTexCoord * uTexRepeat;
-  vShadowCoord = (uShadowMatrix * vec4(aPosition, 1.0)).xyz;
-  gl_Position = uProjection * p;
-}
-`;
+const VERTEX_SHADER = shaderSources.VERTEX_SHADER;
 
-const FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-const int NO_MAPPING = 0, EMISSION_MAPPING = 1, FLOOR_MAPPING = 2;
-const int CIRCUIT_FLOOR = 0, CONFORMAL_FLOOR = 1, PLAIN_FLOOR = 2;
-const int MAX_ARROWS = 32;
-const float ARROW_FLASH = 8.0, ARROW_HALO = 0.6;
-const float CONFORMAL_GAIN = 0.8, PLAIN_GRAY = 128.0 / 255.0;
-const float Ka = 1.6;
-const float Kd = 0.6;
-const float FOG_START = 22.0, FOG_DENSITY = 0.02;
-
-in vec3 vPosition;
-in vec3 vNormal;
-in vec2 vTexCoord;
-in vec3 vShadowCoord;
-
-uniform vec3 uLightDir[2];
-uniform vec3 uLightColor[2];
-uniform vec3 uUp;
-uniform vec3 uFogColor;
-uniform vec3 uBoardOrigin;
-uniform vec3 uBoardX;
-uniform vec3 uBoardY;
-uniform vec3 uFloorNormal;
-uniform vec4 uFloorRects[3];
-uniform vec4 uClipPlane;
-uniform vec2 uScreenSize;
-uniform vec3 uFloorEmissive;
-uniform vec4 uFloorRect;
-uniform vec3 uArrows[MAX_ARROWS];
-uniform mat3 uView;
-
-uniform vec3 uColor;
-uniform vec3 uEmissive;
-uniform vec3 uTopEmissive;
-uniform float uKs;
-uniform float uShininess;
-uniform float uReflectivity;
-uniform float uMirror;
-uniform float uShade;
-
-uniform sampler2D uTexture;
-uniform sampler2D uFloorTex0;
-uniform sampler2D uFloorTex1;
-uniform sampler2D uFloorTex2;
-uniform sampler2D uReflection;
-uniform samplerCube uEnvironment;
-uniform highp sampler2DShadow uShadowMap;
-uniform int uMapping;
-uniform int uFloorStyle;
-
-out vec4 fragColor;
-
-vec3 calculateLight(int i, vec3 N, vec3 V, vec3 color) {
-  vec3 L = normalize(uLightDir[i]);
-  vec3 H = normalize(L + V);
-  float diff = max(dot(N, L), 0.0);
-  float spec = diff > 0.0 ? pow(max(dot(N, H), 0.0), uShininess) : 0.0;
-  return uLightColor[i] * (Kd * diff * color + uKs * spec);
-}
-
-float schlick(float F0, vec3 N, vec3 V) {
-  return F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);
-}
-
-float arrowGlowAt(vec2 p) {
-  float glow = 0.0;
-  for (int i = 0; i < MAX_ARROWS; i++)
-    glow += uArrows[i].z * (1.0 - smoothstep(0.8, 1.0, distance(p, uArrows[i].xy)));
-  return glow;
-}
-
-vec2 floorUv(vec2 uv, vec4 rect) {
-  if (uFloorStyle == CIRCUIT_FLOOR) return uv;
-  vec2 size = rect.zw - rect.xy;
-  return 0.5 + (uv - 0.5) * vec2(size.x / size.y * uScreenSize.y / uScreenSize.x, 1.0);
-}
-
-vec3 floorEmission(vec3 texel) {
-  if (uFloorStyle == CONFORMAL_FLOOR) return CONFORMAL_GAIN * texel;
-  if (uFloorStyle == PLAIN_FLOOR) return uFloorEmissive * PLAIN_GRAY;
-  return uFloorEmissive * texel;
-}
-
-vec3 sampleField(int idx, vec2 uv, vec2 p, float lod) {
-  vec3 texel = idx == 0 ? textureLod(uFloorTex0, uv, lod).rgb
-             : idx == 1 ? textureLod(uFloorTex1, uv, lod).rgb
-                        : textureLod(uFloorTex2, uv, lod).rgb;
-  vec3 emission = floorEmission(texel);
-  float glow = arrowGlowAt(p);
-  return emission * (1.0 + ARROW_FLASH * glow) + ARROW_HALO * glow * uFloorEmissive;
-}
-
-vec3 playfield(vec3 R) {
-  vec3 n = uFloorNormal;
-  float denom = dot(R, n);
-  if (denom >= -1e-4) return vec3(0.01);
-  float t = dot(uBoardOrigin - vPosition, n) / denom;
-  if (t <= 0.0) return vec3(0.01);
-  vec3 h = vPosition + t * R - uBoardOrigin;
-  vec2 p = vec2(dot(h, uBoardX), dot(h, uBoardY));
-  float lod = log2(1.0 + t * 0.2);
-  float rd = FOG_DENSITY * max(t - FOG_START * 0.5, 0.0);
-  float atten = exp(-rd * rd);
-  for (int i = 0; i < 3; i++) {
-    vec4 r = uFloorRects[i];
-    if (all(greaterThanEqual(p, r.xy)) && all(lessThanEqual(p, r.zw))) {
-      vec2 uv = (p - r.xy) / (r.zw - r.xy);
-      return mix(uFogColor, sampleField(i, floorUv(uv, r), p, lod), atten);
-    }
-  }
-  return vec3(0.01);
-}
-
-vec3 environment(vec3 R) {
-  float h = dot(R, uFloorNormal);
-  vec3 scene = texture(uEnvironment, transpose(uView) * R).rgb;
-  if (h > 0.0) return scene;
-  return mix(scene, playfield(R), smoothstep(0.0, 0.25, -h));
-}
-
-vec3 reflection(vec2 uv) {
-  vec2 h = 1.0 / vec2(textureSize(uReflection, 0));
-  return 0.25 * (texture(uReflection, uv + h).rgb + texture(uReflection, uv - h).rgb
-               + texture(uReflection, uv + vec2(h.x, -h.y)).rgb + texture(uReflection, uv - vec2(h.x, -h.y)).rgb);
-}
-
-void main() {
-  if (dot(uClipPlane, vec4(vPosition, 1.0)) < 0.0) discard;
-  vec3 N = normalize(vNormal);
-  vec3 V = normalize(-vPosition);
-  float depthTest = texture(uShadowMap, vShadowCoord);
-  bool inShadowMap = all(greaterThan(vShadowCoord, vec3(0.0))) && all(lessThan(vShadowCoord, vec3(1.0)));
-  float shadow = inShadowMap ? smoothstep(0.3, 0.7, depthTest) : 1.0;
-
-  vec3 result = Ka * uFogColor * uColor;
-  result += shadow * calculateLight(0, N, V, uColor);
-  result += calculateLight(1, N, V, uColor);
-
-  if (uReflectivity > 0.0)
-    result += schlick(uReflectivity, N, V) * environment(reflect(-V, N));
-
-  vec2 uv = uMapping == FLOOR_MAPPING ? floorUv(vTexCoord, uFloorRect) : vTexCoord;
-  vec3 texel = texture(uTexture, uv).rgb;
-  vec3 emission = uMapping == NO_MAPPING ? uEmissive : uEmissive * texel;
-  if (uMapping == FLOOR_MAPPING) {
-    emission = floorEmission(texel);
-    float glow = arrowGlowAt(mix(uFloorRect.xy, uFloorRect.zw, vTexCoord));
-    emission = emission * (1.0 + ARROW_FLASH * glow) + ARROW_HALO * glow * uEmissive;
-  }
-  result += emission + uTopEmissive * smoothstep(0.7, 0.9, dot(N, uUp));
-
-  result *= mix(1.0 - uShade, 1.0, shadow);
-  float d = FOG_DENSITY * max(length(vPosition) - FOG_START, 0.0);
-  vec3 mirror = uMirror > 0.0 ? schlick(uMirror, N, V) * reflection(gl_FragCoord.xy / uScreenSize) : vec3(0.0);
-  fragColor = vec4(mix(uFogColor, result, exp(-d * d)) + mirror, 1.0);
-}
-`;
+const FRAGMENT_SHADER = shaderSources.FRAGMENT_SHADER;
 
 
 //now runs on gpu becasue the js version was too slow - 
@@ -192,636 +48,33 @@ void main() {
 
 //Fullscreen triangle, generated without a vertex buffer.
 //Extends triangle past screenspace to cover whole viewport
-const ESCHER_VERTEX_SHADER = `#version 300 es
-
-void main() {
-    vec2 p = vec2(
-        (gl_VertexID << 1) & 2,
-        gl_VertexID & 2
-    );
-
-    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}
-`;
-
-const ESCHER_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-uniform sampler2D uScene;
-uniform vec2 uResolution;
-uniform vec2 uPivot;
-
-uniform float uAngle;
-uniform float uArms;
-uniform float uStrength;
-uniform float uRepeat;
-uniform float uFrameScale;
-
-out vec4 fragColor;
-
-// -----------------------------
-// Complex number operations
-// -----------------------------
-
-vec2 logZ(vec2 z) {
-    return vec2(
-        log(max(length(z), 1e-8)),
-        atan(z.y, z.x)
-    );
-}
-
-vec2 expZ(vec2 z) {
-    return exp(z.x) * vec2(cos(z.y), sin(z.y));
-}
-
-vec2 rotateZ(vec2 z, float angle) {
-    float c = cos(angle);
-    float s = sin(angle);
-
-    return vec2(
-        c*z.x - s*z.y,
-        s*z.x + c*z.y
-    );
-}
-
-//Log(z) transform from 3bluonebrown video
-vec2 mapZ(vec2 z) {
-    float R = 0.7;
-
-    //Map into logarithmic coordinates.
-    vec2 w = logZ(z / R);
-
-    //Rotate and scale in log space.
-    vec2 mapped = rotateZ(w, -uAngle) * uArms;
-
-    //Interpolate between original and mapped.
-    w = mix(w, mapped, clamp(uStrength, 0.0, 1.0));
-
-    //Radial repetition for recursive copies.
-    if (uRepeat > 1.0) {
-        float period = log(uRepeat);
-        w.x = -mod(-w.x, period);
-    }
-
-    //Return to the complex plane.
-    return R * expZ(w);
-}
-
-void main() {
-    //Screen coordinates -> complex plane.
-    //Dividing by height preserves aspect ratio.
-    vec2 z = (gl_FragCoord.xy - uPivot * uResolution)
-             / uResolution.y;
-
-    //Apply the mathematical transformation.
-    vec2 t = mapZ(z);
-
-    //Complex plane -> texture coordinates.
-    vec2 uv = uPivot + uFrameScale * vec2(
-        t.x * uResolution.y / uResolution.x,
-        t.y
-    );
-
-    fragColor = texture(uScene, uv);
-}
-`;
-
-
 // ============================================================
 // 2. WEBGL RESOURCE SETUP
 // ============================================================
 
-let escher = null;
+const SHADOW_VERTEX_SHADER = shaderSources.SHADOW_VERTEX_SHADER;
 
-//Compile an individual shader.
-function compileEscherShader(type, source) {
-    const shader = gl.createShader(type);
+const SHADOW_FRAGMENT_SHADER = shaderSources.SHADOW_FRAGMENT_SHADER;
 
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
+const TRAIL_VERTEX_SHADER = shaderSources.TRAIL_VERTEX_SHADER;
 
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        const error = gl.getShaderInfoLog(shader);
-        gl.deleteShader(shader);
-        throw new Error(error);
-    }
+const TRAIL_FRAGMENT_SHADER = shaderSources.TRAIL_FRAGMENT_SHADER;
 
-    return shader;
-}
+const SKY_VERTEX_SHADER = shaderSources.SKY_VERTEX_SHADER;
 
-//Create a regular reusable 2D WebGL texture.
-function createEscherTexture() {
-    const tex = gl.createTexture();
+const SKY_FRAGMENT_SHADER2 = shaderSources.SKY_FRAGMENT_SHADER2;
 
-    gl.bindTexture(gl.TEXTURE_2D, tex);
+const POST_VERTEX_SHADER = shaderSources.POST_VERTEX_SHADER;
 
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+const SKY_FRAGMENT_SHADER = shaderSources.SKY_FRAGMENT_SHADER;
 
-    //CLAMP_TO_EDGE keeps sampling within the image boundaries.
-    //The texture() call therefore needs no explicit UV clamp.
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const BLUR_FRAGMENT_SHADER = shaderSources.BLUR_FRAGMENT_SHADER;
 
-    return tex;
-}
-
-//Called only once.
-function initEscherGPU() {
-    //Create shader program.
-    const vs = compileEscherShader(
-        gl.VERTEX_SHADER, ESCHER_VERTEX_SHADER
-    );
-
-    const fs = compileEscherShader(
-        gl.FRAGMENT_SHADER, ESCHER_FRAGMENT_SHADER
-    );
-
-    const program = gl.createProgram();
-
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        throw new Error(gl.getProgramInfoLog(program));
-    }
-
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-
-    //Cache uniform locations so they are not queried every frame.
-    const uniforms = {};
-    const names = [
-        "uScene", "uResolution", "uPivot",
-        "uAngle", "uArms", "uStrength",
-        "uRepeat", "uFrameScale"
-    ];
-
-    for (const name of names) {
-        uniforms[name] = gl.getUniformLocation(program, name);
-    }
-
-    //Source is the unmodified scene.
-    //Output holds the transformed scene.
-    const source = createEscherTexture();
-    const output = createEscherTexture();
-
-    /*
-     * WebGL documentation: framebufferTexture2D()
-     *
-     * Attaches a texture to a framebuffer. Drawing to that
-     * framebuffer writes pixels into the attached texture.
-     *
-     * https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/framebufferTexture2D
-     */
-    const fbo = gl.createFramebuffer();
-
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fbo);
-
-    gl.framebufferTexture2D(
-        gl.DRAW_FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0,
-        gl.TEXTURE_2D,
-        output,
-        0
-    );
-
-    /*
-     * WebGL documentation: bindVertexArray()
-     *
-     * VAOs store vertex-array configuration. This shader uses
-     * gl_VertexID instead of vertex attributes, so an empty
-     * VAO is sufficient.
-     *
-     * https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext/bindVertexArray
-     */
-    const vao = gl.createVertexArray();
-
-    return {
-        program,
-        uniforms,
-        source,
-        output,
-        fbo,
-        vao,
-        width: 0,
-        height: 0
-    };
-}
-
-
-// ============================================================
-// 3. APPLY TRANSFORMATION
-// ============================================================
-
-function applyEscherGPU({
-    angle = 0.10,
-    arms = 4.0,
-    strength = 0.75,
-    repeat = 5.0,
-    frameScale = 0.52,
-    pivot = [0.5, 0.5],
-    show = true
-} = {}) {
-
-    const w = gl.drawingBufferWidth;
-    const h = gl.drawingBufferHeight;
-
-    //Save the state needed to avoid interfering with
-    //the rest of the game's WebGL rendering.
-    const previous = {
-        read: gl.getParameter(gl.READ_FRAMEBUFFER_BINDING),
-        draw: gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
-        viewport: gl.getParameter(gl.VIEWPORT),
-        program: gl.getParameter(gl.CURRENT_PROGRAM),
-        vao: gl.getParameter(gl.VERTEX_ARRAY_BINDING),
-        activeTexture: gl.getParameter(gl.ACTIVE_TEXTURE),
-        colorMask: gl.getParameter(gl.COLOR_WRITEMASK)
-    };
-
-    const flags = [
-        gl.DEPTH_TEST,
-        gl.BLEND,
-        gl.SCISSOR_TEST,
-        gl.CULL_FACE,
-        gl.STENCIL_TEST,
-        gl.RASTERIZER_DISCARD
-    ];
-
-    const enabled = flags.map(flag => gl.isEnabled(flag));
-
-    gl.activeTexture(gl.TEXTURE0);
-    const oldTexture = gl.getParameter(gl.TEXTURE_BINDING_2D);
-
-    try {
-        if (!escher) {
-            escher = initEscherGPU();
-        }
-
-        const e = escher;
-
-        // ----------------------------------------
-        // Resize textures if canvas size changed.
-        // ----------------------------------------
-
-        if (w !== e.width || h !== e.height) {
-            e.width = w;
-            e.height = h;
-
-            /*
-             * texImage2D() allocates texture image storage.
-             *
-             * Passing null for pixel data allocates the image
-             * without uploading any pixels from the CPU.
-             *
-             * RGBA8 is a sized internal format in WebGL2.
-             *
-             * https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/texImage2D
-             */
-            for (const tex of [e.source, e.output]) {
-                gl.bindTexture(gl.TEXTURE_2D, tex);
-
-                gl.texImage2D(
-                    gl.TEXTURE_2D,
-                    0,
-                    gl.RGBA8,
-                    w, h,
-                    0,
-                    gl.RGBA,
-                    gl.UNSIGNED_BYTE,
-                    null
-                );
-            }
-
-            /*
-             * checkFramebufferStatus() reports whether a
-             * framebuffer has complete, usable attachments.
-             *
-             * Check after allocating/resizing the output
-             * texture because the FBO refers to that texture.
-             *
-             * https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/checkFramebufferStatus
-             */
-            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, e.fbo);
-
-            if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER)
-                    !== gl.FRAMEBUFFER_COMPLETE) {
-                throw new Error("Escher framebuffer is incomplete");
-            }
-        }
-
-        // ----------------------------------------
-        // Copy screen -> source texture.
-        // ----------------------------------------
-
-
-        //Use a supplied texture, or capture the canvas.
-        let source = null;
-
-        if (!source) {
-            /*
-            * copyTexSubImage2D() copies pixels from the
-            * current READ_FRAMEBUFFER into an existing texture.
-            *
-            * https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/copyTexSubImage2D
-            */
-            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-            gl.bindTexture(gl.TEXTURE_2D, e.source);
-
-            gl.copyTexSubImage2D(
-                gl.TEXTURE_2D,
-                0,
-                0, 0,
-                0, 0,
-                w, h
-            );
-
-            source = e.source;
-        }
-
-        // Prevent reading and writing the same texture.
-        if (source === e.output) {
-            throw new Error("Cannot use Escher output as its own input");
-        }
-
-        // ----------------------------------------
-        // Render source -> output texture.
-        // ----------------------------------------
-
-        /*
-         * In WebGL2, READ_FRAMEBUFFER and DRAW_FRAMEBUFFER
-         * can be bound independently.
-         *
-         * Binding the FBO as DRAW_FRAMEBUFFER sends fragment
-         * shader output into its attached output texture.
-         *
-         * https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/bindFramebuffer
-         */
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, e.fbo);
-
-        gl.viewport(0, 0, w, h);
-
-        //Fullscreen post-processing shouldn't be affected
-        //by depth, blending, clipping, or stencil state.
-        flags.forEach(flag => gl.disable(flag));
-        gl.colorMask(true, true, true, true);
-
-        gl.useProgram(e.program);
-        gl.bindVertexArray(e.vao);
-
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, source);
-
-        //Set shader parameters.
-        const u = e.uniforms;
-
-        gl.uniform1i(u.uScene, 0);
-        gl.uniform2f(u.uResolution, w, h);
-        gl.uniform2f(u.uPivot, pivot[0], pivot[1]);
-
-        gl.uniform1f(u.uAngle, angle);
-        gl.uniform1f(u.uArms, arms);
-        gl.uniform1f(u.uStrength, strength);
-        gl.uniform1f(u.uRepeat, repeat);
-        gl.uniform1f(u.uFrameScale, frameScale);
-
-        // Draw a fullscreen triangle.
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-        // ----------------------------------------
-        // Optionally display the result.
-        // ----------------------------------------
-
-        if (show) {
-            /*
-             * blitFramebuffer() transfers a rectangular block
-             * of pixels from the read framebuffer to the draw
-             * framebuffer.
-             *
-             * Here:
-             *   READ = transformed texture's framebuffer
-             *   DRAW = default canvas framebuffer
-             *
-             * This displays the texture without another shader.
-             *
-             * https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext/blitFramebuffer
-             */
-            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, e.fbo);
-            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-
-            gl.blitFramebuffer(
-                0, 0, w, h,
-                0, 0, w, h,
-                gl.COLOR_BUFFER_BIT,
-                gl.NEAREST
-            );
-        }
-
-        return e.output;
-
-    } finally {
-        //Restore previous bindings and rendering state.
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, previous.read);
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, previous.draw);
-
-        gl.viewport(...previous.viewport);
-        gl.useProgram(previous.program);
-        gl.bindVertexArray(previous.vao);
-        gl.colorMask(...previous.colorMask);
-
-        flags.forEach((flag, i) => {
-            if (enabled[i]) gl.enable(flag);
-            else gl.disable(flag);
-        });
-
-        gl.bindTexture(gl.TEXTURE_2D, oldTexture);
-        gl.activeTexture(previous.activeTexture);
-    }
-}
-
-const SHADOW_VERTEX_SHADER = `#version 300 es
-in vec3 aPosition;
-uniform mat4 uLightMVP;
-
-void main() {
-  gl_Position = uLightMVP * vec4(aPosition, 1.0);
-}
-`;
-
-const SHADOW_FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
-void main() {}
-`;
-
-const TRAIL_VERTEX_SHADER = `#version 300 es
-in vec3 aPosition;
-in vec2 aTexCoord;
-
-uniform mat4 uModelView;
-uniform mat4 uProjection;
-
-out vec2 vTexCoord;
-
-void main() {
-  vTexCoord = aTexCoord;
-  gl_Position = uProjection * uModelView * vec4(aPosition, 1.0);
-}
-`;
-
-const TRAIL_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-in vec2 vTexCoord;
-
-uniform vec3 uColor;
-
-out vec4 fragColor;
-
-void main() {
-  float fade = 1.0 - vTexCoord.x;
-  float core = 1.0 - vTexCoord.y * vTexCoord.y;
-  fragColor = vec4(uColor * core * fade * fade, 1.0);
-}
-`;
-
-const SKY_VERTEX_SHADER = `#version 300 es
-const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-
-uniform mat4 uView;
-uniform mat4 uProjection;
-
-out vec3 vDirection;
-out vec3 vOrigin;
-
-void main() {
-  vec2 p = corners[gl_VertexID];
-  vec4 eye = inverse(uProjection) * vec4(p, 1.0, 1.0);
-  vDirection = transpose(mat3(uView)) * (eye.xyz / eye.w);
-  vOrigin = -transpose(mat3(uView)) * uView[3].xyz;
-  gl_Position = vec4(p, 1.0, 1.0);
-}
-`;
-
-const SKY_FRAGMENT_SHADER2 = `#version 300 es
-precision highp float;
-
-const float STAR_BRIGHTNESS = 4.0;
-const float CEILING_HEIGHT = 12.0, CEILING_CELL = 4.0, CEILING_GLOW = 0.6, HORIZON_GLOW = 1.5;
-
-in vec3 vDirection;
-in vec3 vOrigin;
-
-uniform vec3 uFogColor;
-uniform vec3 uSkyColor;
-uniform vec3 uGridColor;
-uniform float uTime;
-uniform float uStarScale;
-
-out vec4 fragColor;
-
-float ceiling(vec3 d) {
-  float t = (CEILING_HEIGHT - vOrigin.z) / max(d.z, 0.001);
-  vec2 p = (vOrigin.xy + d.xy * t) / CEILING_CELL;
-  vec2 a = abs(fract(p + 0.5) - 0.5) / fwidth(p);
-  return (1.0 - min(min(a.x, a.y), 1.0)) * smoothstep(0.0, 0.25, d.z) * smoothstep(0.0, 4.0, CEILING_HEIGHT - vOrigin.z);
-}
-
-float stars(vec3 d) {
-  vec3 p = d * uStarScale;
-  vec3 cell = floor(p);
-  float h = fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453);
-  float r = length(p - cell - 0.5);
-  float twinkle = 0.7 + 0.3 * sin(uTime * 3.0 + h * 100.0);
-  return step(0.985, h) * smoothstep(0.0, 0.3, d.z) * smoothstep(0.3, 0.0, r) * twinkle;
-}
-
-void main() {
-  vec3 d = normalize(vDirection);
-  vec3 color = mix(uFogColor, uSkyColor, smoothstep(0.0, 0.5, d.z));
-  color += HORIZON_GLOW * uFogColor * exp(-8.0 * abs(d.z));
-  color += CEILING_GLOW * uGridColor * ceiling(d);
-  fragColor = vec4(color + STAR_BRIGHTNESS * vec3(stars(d)), 1.0);
-}
-`;
-
-const POST_VERTEX_SHADER = `#version 300 es
-const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-out vec2 vUv;
-
-void main() {
-  vec2 p = corners[gl_VertexID];
-  vUv = p * 0.5 + 0.5;
-  gl_Position = vec4(p, 0.0, 1.0);
-}
-`;
-
-const SKY_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-in vec2 vUv;
-uniform sampler2D uSky;
-
-out vec4 fragColor;
-
-void main() {
-    fragColor = texture(uSky, vUv);
-}
-`;
-
-const BLUR_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-// Precomputed weights for a 9-sample Gaussian blur
-
-const float WEIGHTS[5] = float[5](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216); 
-in vec2 vUv;
-
-uniform sampler2D uImage;
-uniform vec2 uStep;
-uniform float uThreshold;
-
-out vec4 fragColor;
-
-vec3 bright(vec2 uv) {
-  return max(texture(uImage, uv).rgb - uThreshold, 0.0);
-}
-
-void main() {
-  vec3 sum = WEIGHTS[0] * bright(vUv);
-  for (int i = 1; i < 5; i++)
-    sum += WEIGHTS[i] * (bright(vUv + float(i) * uStep) + bright(vUv - float(i) * uStep));
-  fragColor = vec4(sum, 1.0);
-}
-`;
-
-const COMPOSITE_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-const float EXPOSURE = 1.4;
-
-in vec2 vUv;
-
-uniform sampler2D uScene;
-uniform sampler2D uBloom0;
-uniform sampler2D uBloom1;
-uniform sampler2D uBloom2;
-uniform sampler2D uBloom3;
-uniform float uBloomStrength;
-
-out vec4 fragColor;
-
-void main() {
-  vec3 bloom = texture(uBloom0, vUv).rgb + texture(uBloom1, vUv).rgb
-             + texture(uBloom2, vUv).rgb + texture(uBloom3, vUv).rgb;
-  vec3 hdr = EXPOSURE * (texture(uScene, vUv).rgb + uBloomStrength * bloom);
-  vec2 c = vUv - 0.5;
-  fragColor = vec4(hdr / (1.0 + hdr) * (1.0 - 0.6 * dot(c, c)), 1.0);
-}
-`;
+const COMPOSITE_FRAGMENT_SHADER = shaderSources.COMPOSITE_FRAGMENT_SHADER;
 
 const NO_MAPPING = 0, EMISSION_MAPPING = 1, FLOOR_MAPPING = 2;
-const CIRCUIT_FLOOR = 0, CONFORMAL_FLOOR = 1, PLAIN_FLOOR = 2;
+const CIRCUIT_FLOOR = 0, CONFORMAL_FLOOR = 1;
+export const PLAIN_FLOOR = 2;
 
 const LIGHTS = [
   { pos: [-22, 8, 22], color: [0.55, 0.65, 0.85] },
@@ -881,6 +134,11 @@ const canvas = document.getElementById("glcanvas");
 const gl = canvas.getContext("webgl2", { powerPreference: "high-performance" });
 if (!gl) throw new Error("WebGL 2 is not supported");
 if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("EXT_color_buffer_float is not supported");
+const applyEscherGPU = createEscherPass(
+  gl,
+  shaderSources.ESCHER_VERTEX_SHADER,
+  shaderSources.ESCHER_FRAGMENT_SHADER,
+);
 
 function compile(type, source) {
   const shader = gl.createShader(type);
@@ -1137,8 +395,6 @@ const fieldTextures = FIELD_FLOORS.map(loadTexture);
 const gridTexture = loadTexture("textures/neon/grid.png");
 
 //skytexture
-const skyTexture = loadTexture("textures/neon/sky.png");
-
 const palette = structuredClone(PALETTES[0]);
 
 const MATERIALS = {
@@ -1209,9 +465,14 @@ function fitProjection(view, W, H, insets, corners, zoom) {
 let chaseEye = null, chaseTarget = null, cameraRect = null;
 let orbitYaw = 0, orbitPitch = 0, orbitElevation = 0;
 
-function orbitCamera(dx, dy) {
+export function orbitCamera(dx, dy) {
   orbitYaw -= Math.sin(Math.cos(orbitElevation) || 1) * dx * 0.01;
   orbitPitch += dy * 0.01;
+}
+
+export function setOrbitCamera(yaw, pitch) {
+  orbitYaw = yaw;
+  orbitPitch = pitch;
 }
 
 function orbit(eye, target, pivot) {
@@ -1461,6 +722,12 @@ function drawMirror(camera, mirror, projection) {
 let trailAccum = 0;
 const TRAIL_STEP = 1 / 60;
 
+export function resetRenderTracking() {
+  trail.length = 0;
+  trailAccum = 0;
+  chaseEye = chaseTarget = null;
+}
+
 function updateTrail(dt) {
   if (game.state !== "play") {
     trail.length = 0;
@@ -1580,7 +847,7 @@ function drawSky(texture) {
 
 let conformalSky = null;
 
-function render(dt, insets, ballCam, zoom, dev = {}) {
+export function render(dt, insets, ballCam, zoom, dev = {}) {
   const bloomOn = dev.bloom ?? true;
   const trailOn = dev.trail ?? true;
   const shadowsOn = dev.shadows ?? true;
@@ -1658,7 +925,7 @@ function render(dt, insets, ballCam, zoom, dev = {}) {
   setView(camera, NO_CLIP);
 
   //Render the previous frame's transformed screen as the sky.
-  if (window.escherParams.enabled && conformalSky) {
+  if (dev.escherParams?.enabled && conformalSky) {
     drawSky(conformalSky);
   }
   else{
@@ -1676,7 +943,7 @@ function render(dt, insets, ballCam, zoom, dev = {}) {
   if (bloomOn) drawBloom();
   drawComposite(bloomOn);
 
-  const p = window.escherParams;
+  const p = dev.escherParams ?? { enabled: false };
 
   if (p.enabled || floorStyle === CONFORMAL_FLOOR) {
       conformalSky = applyEscherGPU({
