@@ -16,6 +16,10 @@
 
   <canvas id="glcanvas"></canvas>
 
+  <div id="secondaryView" hidden>
+    <span id="secondaryViewLabel"></span>
+  </div>
+
   <div id="hud"></div>
 
   <!-- =======================================
@@ -29,6 +33,14 @@
     </div>
 
     <div id="settingsDrawer">
+      <!-- Audio -->
+      <div class="setting" id="musicSetting">
+        <button id="musicToggle" type="button" aria-pressed="true">Music On</button>
+        <input id="musicVolume" type="range" min="0" max="1" step="0.01" value="0.25"
+               aria-label="Music volume">
+        <output id="musicVolumeValue" for="musicVolume">25%</output>
+      </div>
+
       <!-- Difficulty -->
       <label class="setting" id="difficulty">
         Difficulty

@@ -2,11 +2,26 @@ import { identity, multiply, orthonormalize, rotateAxis } from "../math/mat4.js"
 import {
   ARROW_LIT, ARROW_REACH, AIM_MARGIN, AIM_SPACING, AIM_SPEED_STEP,
   AIM_TARGET_SPREAD, AIM_TARGET_STEP, BALL_RADIUS, FIELDS, FLIPPER_Y, GATE_HALF,
-  GRAVITY, LAUNCH_FLASH, LANE_X, MAX_SPEED, SUBSTEPS, TILT_GRAVITY, TILT_MAX,
-  TILT_SPEED, WALL_SOUND_DV, flipperTip, table,
+  GRAVITY, LAUNCH_CHARGE_SPEED, LAUNCH_FLASH, LAUNCH_SPEED, LANE_X, MAX_SPEED,
+  MULTIBALL_SCORE, SUBSTEPS, TILT_GRAVITY, TILT_MAX, TILT_SPEED, WALL_SOUND_DV,
+  fieldIndexForY, flipperTip, table,
 } from "./table.js";
+
+function createBall(p = [0, 0], v = [0, 0], tint = null) {
+  return {
+    p,
+    v,
+    rotation: identity(),
+    tint,
+    bumperContacts: new Set(),
+    arrowContacts: new Set(),
+    flipperKicks: new Set(),
+  };
+}
+
 export const game = {
-  ball: { p: [0, 0], v: [0, 0], rotation: identity() },
+  ball: createBall(),
+  activeBalls: [],
   score: 0,
   balls: 3,
   field: 0,
@@ -18,15 +33,18 @@ export const game = {
   charge: 0,
   charging: false,
   launch: 0,
+  multiballSpawned: false,
+  multiballNotice: 0,
+  multiballCandidate: null,
   sounds: new Set(),
 };
 
-const ballOnPlunger = () => game.ball.p[0] > LANE_X && game.ball.p[1] < 2;
+const ballOnPlunger = ball => ball.p[0] > LANE_X && ball.p[1] < 2;
 
 export function resetBall() {
-  game.ball.p = [(LANE_X + FIELDS[0].x1) / 2, 0.5 + BALL_RADIUS];
-  game.ball.v = [0, 0];
-  game.ball.rotation = identity();
+  game.ball = createBall([(LANE_X + FIELDS[0].x1) / 2, 0.5 + BALL_RADIUS]);
+  game.activeBalls = [game.ball];
+  game.multiballCandidate = null;
   game.charging = false;
   game.charge = 0;
   game.launch = 0;
@@ -36,14 +54,16 @@ export function resetBall() {
 export function newGame() {
   game.score = 0;
   game.balls = 3;
+  game.multiballSpawned = false;
+  game.multiballNotice = 0;
   resetBall();
 }
 
 export function setPlunger(down) {
   if (game.state === "over") { if (down) newGame(); return; }
   if (down) { game.charging = true; return; }
-  if (game.charging && ballOnPlunger()) {
-    game.ball.v = [0, 36 + 20 * game.charge];
+  if (game.charging && game.activeBalls.includes(game.ball) && ballOnPlunger(game.ball)) {
+    game.ball.v = [0, LAUNCH_SPEED + LAUNCH_CHARGE_SPEED * game.charge];
     game.state = "play";
     game.launch = LAUNCH_FLASH;
     game.sounds.add("launch");
@@ -95,7 +115,7 @@ function collideWalls(ball) {
 function collideBumpers(ball) {
   for (const bp of table.bumpers) {
     if (!resolve(ball, bp.c, BALL_RADIUS + bp.r, 0.9)) {
-      bp.touching = false;
+      ball.bumperContacts.delete(bp);
       continue;
     }
     const n = sub(ball.p, bp.c);
@@ -105,11 +125,13 @@ function collideBumpers(ball) {
       ball.v[0] += (bp.kick - vn) * n[0] / len;
       ball.v[1] += (bp.kick - vn) * n[1] / len;
     }
-    if (!bp.touching) {
+    if (!ball.bumperContacts.has(bp)) {
       game.score += bp.points;
       bp.lit = 0.15;
-      bp.touching = true;
+      ball.bumperContacts.add(bp);
       game.sounds.add("bumper");
+      if (!game.multiballSpawned && game.score >= MULTIBALL_SCORE)
+        game.multiballCandidate = ball;
     }
   }
 }
@@ -120,9 +142,10 @@ function collideFlippers(ball) {
     const r = sub(q, f.pivot);
     const vs = [-f.omega * r[1], f.omega * r[0]];
     const touching = resolve(ball, q, BALL_RADIUS + f.radius, 0.3, vs);
-    if (touching && f.side * f.omega > 0) f.kicking = true;
-    else if (!touching && f.kicking) {
-      f.kicking = false;
+    if (!f.pressed) ball.flipperKicks.delete(f);
+    if (touching && f.side * f.omega > 0) ball.flipperKicks.add(f);
+    else if (!touching && ball.flipperKicks.has(f)) {
+      ball.flipperKicks.delete(f);
       aimShot(ball, f);
     }
   }
@@ -131,13 +154,78 @@ function collideFlippers(ball) {
 function crossArrows(ball) {
   for (const a of table.arrows) {
     const over = Math.hypot(ball.p[0] - a.p[0], ball.p[1] - a.p[1]) < ARROW_REACH;
-    if (over && !a.over) {
+    if (over && !ball.arrowContacts.has(a)) {
       a.lit = ARROW_LIT;
       ball.v[0] += a.boost * a.dir[0];
       ball.v[1] += a.boost * a.dir[1];
+      ball.arrowContacts.add(a);
     }
-    a.over = over;
+    if (!over) ball.arrowContacts.delete(a);
   }
+}
+
+function collideBalls(balls) {
+  const diameter = BALL_RADIUS * 2;
+  for (let i = 0; i < balls.length; i++) {
+    for (let j = i + 1; j < balls.length; j++) {
+      const a = balls[i], b = balls[j];
+      const dx = b.p[0] - a.p[0], dy = b.p[1] - a.p[1];
+      const distance = Math.hypot(dx, dy);
+      if (distance >= diameter) continue;
+
+      const relativeX = b.v[0] - a.v[0], relativeY = b.v[1] - a.v[1];
+      const relativeLength = Math.hypot(relativeX, relativeY);
+      const nx = distance > 1e-8 ? dx / distance : relativeLength > 1e-8 ? -relativeX / relativeLength : 1;
+      const ny = distance > 1e-8 ? dy / distance : relativeLength > 1e-8 ? -relativeY / relativeLength : 0;
+      const overlap = (diameter - distance) / 2;
+      a.p[0] -= nx * overlap;
+      a.p[1] -= ny * overlap;
+      b.p[0] += nx * overlap;
+      b.p[1] += ny * overlap;
+
+      const relativeSpeed = relativeX * nx + relativeY * ny;
+      if (relativeSpeed < 0) {
+        const impulse = -(1 + 0.9) * relativeSpeed / 2;
+        a.v[0] -= impulse * nx;
+        a.v[1] -= impulse * ny;
+        b.v[0] += impulse * nx;
+        b.v[1] += impulse * ny;
+        if (Math.abs(relativeSpeed) > WALL_SOUND_DV) game.sounds.add("wall");
+      }
+    }
+  }
+}
+
+function addMultiball() {
+  const source = game.activeBalls.includes(game.multiballCandidate)
+    ? game.multiballCandidate
+    : game.activeBalls[0];
+  if (!source) return;
+
+  const speed = Math.hypot(source.v[0], source.v[1]);
+  const perpendicular = speed > 1e-8
+    ? [-source.v[1] / speed, source.v[0] / speed]
+    : [1, 0];
+  const offset = BALL_RADIUS * 2.4;
+  const candidates = [
+    [source.p[0] + perpendicular[0] * offset, source.p[1] + perpendicular[1] * offset],
+    [source.p[0] - perpendicular[0] * offset, source.p[1] - perpendicular[1] * offset],
+    [source.p[0] + offset, source.p[1]],
+    [source.p[0] - offset, source.p[1]],
+  ];
+  const position = candidates.find(([x, y]) =>
+    game.activeBalls.every(ball => Math.hypot(x - ball.p[0], y - ball.p[1]) >= BALL_RADIUS * 2.1))
+    ?? candidates[0];
+  const direction = source.v[0] < 0 ? -1 : 1;
+  const angle = direction * 0.35;
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  const ball = createBall(position, speed > 1e-8
+    ? [source.v[0] * cos - source.v[1] * sin, source.v[0] * sin + source.v[1] * cos]
+    : [20, 20], [0.95, 0.36, 0.06]);
+  game.activeBalls.push(ball);
+  game.multiballSpawned = true;
+  game.multiballNotice = 3;
+  game.sounds.add("bumper");
 }
 
 function isClear(p, v, goalY) {
@@ -183,7 +271,6 @@ const approach = (value, target, step) =>
 
 function moveFlippers(dt) {
   for (const f of table.flippers) {
-    if (!f.pressed) f.kicking = false;
     const prev = f.angle;
     f.angle = approach(f.angle, f.pressed ? f.upAngle : f.restAngle, f.speed * dt);
     f.omega = f.side * (f.angle - prev) / dt;
@@ -193,10 +280,10 @@ function moveFlippers(dt) {
 export function stepPhysics(dt) {
   if (!(dt > 0)) return;
   const h = dt / SUBSTEPS;
-  const ball = game.ball;
 
   if (game.charging) game.charge = Math.min(1, game.charge + dt);
   game.launch = Math.max(0, game.launch - dt);
+  game.multiballNotice = Math.max(0, game.multiballNotice - dt);
   const [left, right, down, up] = game.tilting;
   const tiltTarget = [right - left + game.tiltStick[0], up - down + game.tiltStick[1]]
     .map(d => TILT_MAX * Math.max(-1, Math.min(1, d)));
@@ -207,31 +294,45 @@ export function stepPhysics(dt) {
   for (let i = 0; i < SUBSTEPS; i++) {
     moveFlippers(h);
     if (game.state === "over") continue;
+    const previousPositions = new Map();
+    for (const ball of game.activeBalls) {
+      previousPositions.set(ball, [...ball.p]);
+      ball.v[0] += TILT_GRAVITY * Math.sin(game.tilt[0]) * h;
+      ball.v[1] += (TILT_GRAVITY * Math.sin(game.tilt[1]) - GRAVITY) * h;
+      const speed = Math.hypot(ball.v[0], ball.v[1]);
+      if (speed > MAX_SPEED) { ball.v[0] *= MAX_SPEED / speed; ball.v[1] *= MAX_SPEED / speed; }
+      ball.p[0] += ball.v[0] * h;
+      ball.p[1] += ball.v[1] * h;
 
-    const [x, y] = ball.p;
-    ball.v[0] += TILT_GRAVITY * Math.sin(game.tilt[0]) * h;
-    ball.v[1] += (TILT_GRAVITY * Math.sin(game.tilt[1]) - GRAVITY) * h;
-    const speed = Math.hypot(ball.v[0], ball.v[1]);
-    if (speed > MAX_SPEED) { ball.v[0] *= MAX_SPEED / speed; ball.v[1] *= MAX_SPEED / speed; }
-    ball.p[0] += ball.v[0] * h;
-    ball.p[1] += ball.v[1] * h;
-
-    collideWalls(ball);
-    collideBumpers(ball);
-    collideFlippers(ball);
-    crossArrows(ball);
-
-    const dx = ball.p[0] - x, dy = ball.p[1] - y, d = Math.hypot(dx, dy);
-    if (d > 1e-6) ball.rotation = multiply(rotateAxis([-dy / d, dx / d, 0], d / BALL_RADIUS), ball.rotation);
+      collideWalls(ball);
+      collideBumpers(ball);
+      collideFlippers(ball);
+      crossArrows(ball);
+    }
+    collideBalls(game.activeBalls);
+    for (const ball of game.activeBalls) {
+      const [x, y] = previousPositions.get(ball);
+      const dx = ball.p[0] - x, dy = ball.p[1] - y, d = Math.hypot(dx, dy);
+      if (d > 1e-6) ball.rotation = multiply(rotateAxis([-dy / d, dx / d, 0], d / BALL_RADIUS), ball.rotation);
+      ball.rotation = orthonormalize(ball.rotation);
+    }
   }
-  ball.rotation = orthonormalize(ball.rotation);
-  game.field = Math.max(0, FIELDS.findLastIndex(f => ball.p[1] > f.y0 + FLIPPER_Y));
 
-  if (game.state === "play" && ballOnPlunger() && ball.v[1] <= 0) game.state = "ready";
-
-  if (game.state !== "over" && ball.p[1] < -BALL_RADIUS * 2) {
+  if (game.state !== "over") {
+    game.activeBalls = game.activeBalls.filter(ball => ball.p[1] >= -BALL_RADIUS * 2);
+  }
+  if (game.state !== "over" && game.activeBalls.length === 0) {
     game.balls--;
     if (game.balls > 0) resetBall();
     else game.state = "over";
   }
+
+  if (game.activeBalls.length) {
+    if (!game.activeBalls.includes(game.ball)) game.ball = game.activeBalls[0];
+    game.field = Math.max(...game.activeBalls.map(ball => fieldIndexForY(ball.p[1])));
+  }
+  if (game.state === "play" && game.activeBalls.length
+      && game.activeBalls.every(ball => ballOnPlunger(ball) && ball.v[1] <= 0)) game.state = "ready";
+  if (!game.multiballSpawned && game.score >= MULTIBALL_SCORE && game.activeBalls.length)
+    addMultiball();
 }

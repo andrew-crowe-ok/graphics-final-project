@@ -8,17 +8,20 @@ import { createHelpDialog } from "./ui/help.js";
 import { createHud } from "./ui/hud.js";
 import { installEscherControls } from "./ui/escher-controls.js";
 import { createSettings } from "./ui/settings.js";
+import { createSecondaryView } from "./ui/secondary-view.js";
 
 export function startApp() {
   const audio = createSoundPlayer();
   const help = createHelpDialog(audio);
   const escherParams = installEscherControls();
+  const secondaryView = createSecondaryView();
 
   let touchControls;
   const settings = createSettings({
     game,
     help: help.dialog,
     devTools,
+    audio,
     orbitCamera,
     setOrbitCamera,
     resetTilt: () => touchControls?.resetTilt(),
@@ -65,9 +68,10 @@ export function startApp() {
     if (!help.dialog.open) stepPhysics(simDt);
     for (const name of game.sounds) audio.play(name);
     game.sounds.clear();
-    render(dt, settings.insets, settings.camera.ballCam, settings.zoom, {
+    render(dt, settings.insets, settings.zoom, {
       ...devTools.renderOptions(simDt),
       escherParams,
+      secondaryView,
     });
     updateHud();
     devTools.updateStats(dt, settings.zoom);
