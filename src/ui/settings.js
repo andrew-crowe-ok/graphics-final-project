@@ -1,14 +1,16 @@
 const CAMERAS = [
-  { name: "Ball Cam", ballCam: true, yaw: 0, pitch: 0, zoom: 1 },
-  { name: "Table Cam", ballCam: false, yaw: 0, pitch: 0, zoom: 1 },
-  { name: "Corner Cam", ballCam: false, yaw: -5.42, pitch: -0.328, zoom: 1.98 },
+  { name: "Table Cam", yaw: 0, pitch: 0, zoom: 1 },
+  { name: "Corner Cam", yaw: -5.42, pitch: -0.328, zoom: 1.98 },
 ];
 
-export function createSettings({ game, help, devTools, orbitCamera, setOrbitCamera, resetTilt }) {
+export function createSettings({ game, help, devTools, audio, orbitCamera, setOrbitCamera, resetTilt }) {
   const canvas = document.getElementById("glcanvas");
   const cameraBtn = document.getElementById("cameraBtn");
   const difficultySlider = document.getElementById("difficultySlider");
   const difficultyValue = document.getElementById("difficultyValue");
+  const musicToggle = document.getElementById("musicToggle");
+  const musicVolume = document.getElementById("musicVolume");
+  const musicVolumeValue = document.getElementById("musicVolumeValue");
   const uiDock = document.getElementById("uiDock");
   const cameraRow = document.getElementById("cameraRow");
   const settingsDrawer = document.getElementById("settingsDrawer");
@@ -43,6 +45,24 @@ export function createSettings({ game, help, devTools, orbitCamera, setOrbitCame
   });
   difficultySlider.addEventListener("change", () => difficultySlider.blur());
   game.difficulty = difficultySlider.value / 10;
+
+  let musicEnabled = true;
+  function updateMusicToggle() {
+    musicToggle.textContent = musicEnabled ? "Music On" : "Music Off";
+    musicToggle.setAttribute("aria-pressed", String(musicEnabled));
+  }
+  musicToggle.addEventListener("click", () => {
+    musicEnabled = audio.toggleMusic();
+    updateMusicToggle();
+  });
+  musicVolume.addEventListener("input", () => {
+    const volume = Number(musicVolume.value);
+    audio.setMusicVolume(volume);
+    musicVolumeValue.textContent = `${Math.round(volume * 100)}%`;
+  });
+  audio.setMusicEnabled(musicEnabled);
+  audio.setMusicVolume(Number(musicVolume.value));
+  updateMusicToggle();
 
   window.addEventListener("wheel", event => {
     if (help.open) return;

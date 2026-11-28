@@ -1,7 +1,9 @@
 export const BALL_RADIUS = 0.5;
 export const GRAVITY = 30;
 export const SUBSTEPS = 8;
-export const MAX_SPEED = 60;
+export const MAX_SPEED = 72;
+export const LAUNCH_SPEED = 44, LAUNCH_CHARGE_SPEED = 24;
+export const MULTIBALL_SCORE = 1000;
 export const LANE_X = 18.4;
 export const FLIPPER_Y = 4.6;
 export const GATE_X = 9.2;
@@ -9,7 +11,7 @@ export const GATE_HALF = 2.0;
 export const TILT_MAX = 0.08;
 export const TILT_SPEED = 0.6;
 export const TILT_GRAVITY = 750;
-export const ARROW_REACH = 1.0, ARROW_BOOST = 2, LANE_BOOST = 4;
+export const ARROW_REACH = 1.0, ARROW_BOOST = 2.5, LANE_BOOST = 5;
 export const ARROW_LIT = 0.25;
 export const LAUNCH_FLASH = 0.3;
 export const AIM_SPACING = 0.4, AIM_MARGIN = 0.05, AIM_SPEED_STEP = 2, AIM_TARGET_SPREAD = 1.5, AIM_TARGET_STEP = 0.25;
@@ -44,7 +46,6 @@ function makeFlipper(pivot, side, restAngle = -0.5, upAngle = 0.45) {
     angle: restAngle,
     omega: 0,
     pressed: false,
-    kicking: false,
   };
 }
 
@@ -63,6 +64,9 @@ export const FIELDS = [
   { x0: 2.2, y0: 37.2, x1: 16.2, y1: 63 },
   { x0: 2.2, y0: 64.2, x1: 16.2, y1: 80 },
 ];
+
+export const fieldIndexForY = y =>
+  Math.max(0, FIELDS.findLastIndex(field => y > field.y0 + FLIPPER_Y));
 
 function gate(x, below, above) {
   const y = above.y0 + FLIPPER_Y;
@@ -110,14 +114,14 @@ export const table = {
     ...GATES.flatMap(g => g.walls),
   ],
   bumpers: [
-    { c: [6, 24], r: 1.2, kick: 18, points: 100, lit: 0 },
-    { c: [12.4, 24], r: 1.2, kick: 18, points: 100, lit: 0 },
-    { c: [9.2, 19], r: 1.2, kick: 18, points: 100, lit: 0 },
-    { c: [5.6, 51], r: 1.0, kick: 18, points: 200, lit: 0 },
-    { c: [12.8, 51], r: 1.0, kick: 18, points: 200, lit: 0 },
-    { c: [6.2, 75.5], r: 1.0, kick: 18, points: 500, lit: 0 },
-    { c: [12.2, 75.5], r: 1.0, kick: 18, points: 500, lit: 0 },
-    { c: [9.2, 77.5], r: 1.0, kick: 18, points: 500, lit: 0 },
+    { c: [6, 24], r: 1.2, kick: 22, points: 100, lit: 0 },
+    { c: [12.4, 24], r: 1.2, kick: 22, points: 100, lit: 0 },
+    { c: [9.2, 19], r: 1.2, kick: 22, points: 100, lit: 0 },
+    { c: [5.6, 51], r: 1.0, kick: 22, points: 200, lit: 0 },
+    { c: [12.8, 51], r: 1.0, kick: 22, points: 200, lit: 0 },
+    { c: [6.2, 75.5], r: 1.0, kick: 22, points: 500, lit: 0 },
+    { c: [12.2, 75.5], r: 1.0, kick: 22, points: 500, lit: 0 },
+    { c: [9.2, 77.5], r: 1.0, kick: 22, points: 500, lit: 0 },
   ],
   flippers: [
     makeFlipper([5.4, 4.6], +1),

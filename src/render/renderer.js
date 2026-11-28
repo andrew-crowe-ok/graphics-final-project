@@ -6,7 +6,9 @@ import {
   createCube, createCylinder, createFlipper, createSphere, createTorus,
 } from "../geometry/meshes.js";
 import { game } from "../game/physics.js";
-import { ARROW_LIT, BALL_RADIUS, GATE_HALF, LAUNCH_FLASH, LANE_X, table } from "../game/table.js";
+import {
+  ARROW_LIT, BALL_RADIUS, GATE_HALF, LAUNCH_FLASH, LANE_X, fieldIndexForY, table,
+} from "../game/table.js";
 import { createEscherPass } from "./passes/escher.js";
 
 const SHADER_FILES = {
@@ -101,7 +103,7 @@ const CUBE_FACES = [
   { dir: [0, 0, 1], up: [0, -1, 0] },
 ];
 const BLOOM_LEVELS = 4, BLOOM_THRESHOLD = 1.0;
-const TRAIL_LENGTH = 40, TRAIL_WIDTH = 0.4, TRAIL_HEIGHT = 0.25;
+const TRAIL_LENGTH = 40, TRAIL_WIDTH = 0.4;
 
 const CABINET = {
   rim: 1.2,
@@ -372,7 +374,6 @@ const trailTexCoordBuffer = createTrailBuffer("aTexCoord", 2);
 gl.bindVertexArray(null);
 const trailPositions = new Float32Array(TRAIL_LENGTH * 6);
 const trailTexCoords = new Float32Array(TRAIL_LENGTH * 4);
-const trail = [];
 
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -444,25 +445,44 @@ function fitCorners([x0, y0, x1, y1]) {
   return corners;
 }
 
-function fitProjection(view, W, H, insets, corners, zoom) {
+function fitProjection(view, W, H, insets, corners, zoom, aspectRatio) {
   let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
   for (const c of corners) {
     const [x, y, z] = transformPoint(view, c);
     xmin = Math.min(xmin, x / -z); xmax = Math.max(xmax, x / -z);
     ymin = Math.min(ymin, y / -z); ymax = Math.max(ymax, y / -z);
   }
+  const projectionWidth = aspectRatio === undefined ? W : H * aspectRatio;
   const margin = 1.04, usable = H - insets.top - insets.bottom;
-  const fit = Math.max((xmax - xmin) * margin / W, (ymax - ymin) * margin / usable);
-  const s = fit / zoom, slack = Math.max(0, fit - s);
+  const fit = Math.max((xmax - xmin) * margin / projectionWidth, (ymax - ymin) * margin / usable);
+  const s = fit / zoom;
   const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
-  const [bx, by, bz] = transformPoint(multiply(view, board), [game.ball.p[0], game.ball.p[1], BALL_RADIUS]);
-  const fx = clamp(bx / -bz, cx - slack * W / 2, cx + slack * W / 2);
-  const fy = clamp(by / -bz, cy - slack * usable / 2, cy + slack * usable / 2);
-  const bottom = fy - s * (insets.bottom + usable / 2);
-  return frustum(fx - s * W / 2, fx + s * W / 2, bottom, bottom + s * H, 1, 200);
+  const bottom = cy - s * (insets.bottom + usable / 2);
+  return frustum(cx - s * projectionWidth / 2, cx + s * projectionWidth / 2, bottom, bottom + s * H, 1, 200);
 }
 
-let chaseEye = null, chaseTarget = null, cameraRect = null;
+function secondaryFieldIndex() {
+  const occupied = new Set(game.activeBalls.map(ball => fieldIndexForY(ball.p[1])));
+  if (occupied.size < 2) return null;
+  return [...occupied].find(index => index !== game.field) ?? null;
+}
+
+function canvasViewport(bounds) {
+  const canvasBounds = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / canvasBounds.width;
+  const scaleY = canvas.height / canvasBounds.height;
+  const x0 = clamp(Math.floor((bounds.left - canvasBounds.left) * scaleX), 0, canvas.width);
+  const x1 = clamp(Math.ceil((bounds.right - canvasBounds.left) * scaleX), 0, canvas.width);
+  const top = clamp(Math.floor((bounds.top - canvasBounds.top) * scaleY), 0, canvas.height);
+  const bottom = clamp(Math.ceil((bounds.bottom - canvasBounds.top) * scaleY), 0, canvas.height);
+  return {
+    x: x0, y: canvas.height - bottom, width: x1 - x0, height: bottom - top,
+    aspectRatio: bounds.width / bounds.height,
+  };
+}
+
+let cameraRect = null;
+let secondaryCameraRect = null;
 let orbitYaw = 0, orbitPitch = 0, orbitElevation = 0;
 
 export function orbitCamera(dx, dy) {
@@ -482,15 +502,6 @@ function orbit(eye, target, pivot) {
   orbitPitch = orbitElevation - base;
   const m = multiply(translate(...pivot), rotateZ(orbitYaw), rotateX(-orbitPitch), translate(-pivot[0], -pivot[1], -pivot[2]));
   return lookAt(transformPoint(m, eye), transformPoint(m, target), transformDirection(m, [0, 0, 1]));
-}
-
-function chaseView(dt) {
-  const [x, y] = game.ball.p, vx = game.ball.v[0];
-  const eye = [x + vx * 0.02, y - 3.2, 1.85], target = [x + vx * 0.08, y + 5, 0.4];
-  const t = smoothFactor(0.22, dt);
-  chaseEye = chaseEye ? lerp(chaseEye, eye, t) : eye;
-  chaseTarget = chaseTarget ? lerp(chaseTarget, target, t) : target;
-  return orbit(transformPoint(board, chaseEye), transformPoint(board, chaseTarget), transformPoint(board, [x, y, BALL_RADIUS]));
 }
 
 const TABLE_CENTER = center(rect(table.fields[0]));
@@ -619,9 +630,10 @@ function drawPlunger() {
   }
 }
 
-function drawBall() {
-  const [x, y] = game.ball.p;
-  draw(sphereMesh, multiply(translate(x, y, BALL_RADIUS), game.ball.rotation, scale(BALL_RADIUS, BALL_RADIUS, BALL_RADIUS)), MATERIALS.ball);
+function drawBall(ball) {
+  const [x, y] = ball.p;
+  const material = ball.tint ? { ...MATERIALS.ball, color: ball.tint } : MATERIALS.ball;
+  draw(sphereMesh, multiply(translate(x, y, BALL_RADIUS), ball.rotation, scale(BALL_RADIUS, BALL_RADIUS, BALL_RADIUS)), material);
 }
 
 function drawScene(withBall = true) {
@@ -632,7 +644,7 @@ function drawScene(withBall = true) {
   table.bumpers.forEach(drawBumper);
   table.flippers.forEach(drawFlipper);
   drawPlunger();
-  if (withBall) drawBall();
+  if (withBall) game.activeBalls.forEach(drawBall);
 }
 
 function drawWorld() {
@@ -681,7 +693,7 @@ function setView(matrix, clipPlane) {
 }
 
 function drawEnvironment() {
-  const eye = transformPoint(board, [game.ball.p[0], game.ball.p[1], BALL_RADIUS]);
+  const eye = transformPoint(board, [TABLE_CENTER[0], TABLE_CENTER[1], BALL_RADIUS]);
   const projection = perspective(Math.PI / 2, 1, 0.1, 200);
   gl.bindFramebuffer(gl.FRAMEBUFFER, environmentFramebuffer);
   gl.viewport(0, 0, ENVIRONMENT_SIZE, ENVIRONMENT_SIZE);
@@ -719,44 +731,47 @@ function drawMirror(camera, mirror, projection) {
   gl.activeTexture(gl.TEXTURE0);
 }
 
-let trailAccum = 0;
 const TRAIL_STEP = 1 / 60;
+const trails = new Map();
 
 export function resetRenderTracking() {
-  trail.length = 0;
-  trailAccum = 0;
-  chaseEye = chaseTarget = null;
+  trails.clear();
 }
 
 function updateTrail(dt) {
   if (game.state !== "play") {
-    trail.length = 0;
-    trailAccum = 0;
+    trails.clear();
     return;
   }
-  trailAccum += dt;
-  if (trail.length === 0) {
-    trail.unshift([...game.ball.p]);
-    trailAccum = 0;
-    return;
+
+  const activeBalls = new Set(game.activeBalls);
+  for (const ball of trails.keys()) if (!activeBalls.has(ball)) trails.delete(ball);
+  for (const ball of game.activeBalls) {
+    let trail = trails.get(ball);
+    if (!trail) {
+      trails.set(ball, { points: [[...ball.p]], elapsed: 0 });
+      continue;
+    }
+
+    trail.elapsed += dt;
+    while (trail.elapsed >= TRAIL_STEP) {
+      trail.elapsed -= TRAIL_STEP;
+      trail.points.unshift([...ball.p]);
+      if (trail.points.length > TRAIL_LENGTH) trail.points.pop();
+    }
+    trail.points[0][0] = ball.p[0];
+    trail.points[0][1] = ball.p[1];
   }
-  while (trailAccum >= TRAIL_STEP) {
-    trailAccum -= TRAIL_STEP;
-    trail.unshift([...game.ball.p]);
-    if (trail.length > TRAIL_LENGTH) trail.pop();
-  }
-  trail[0][0] = game.ball.p[0];
-  trail[0][1] = game.ball.p[1];
 }
 
-function drawTrail(projection) {
+function drawTrailPoints(trail, projection) {
   if (trail.length < 2) return;
   trail.forEach(([x, y], i) => {
     const [ax, ay] = trail[Math.max(i - 1, 0)], [bx, by] = trail[Math.min(i + 1, trail.length - 1)];
     const len = Math.hypot(ax - bx, ay - by) || 1;
     const age = i / (TRAIL_LENGTH - 1), w = TRAIL_WIDTH * (1 - age);
     const nx = -(ay - by) / len * w, ny = (ax - bx) / len * w;
-    trailPositions.set([x + nx, y + ny, TRAIL_HEIGHT, x - nx, y - ny, TRAIL_HEIGHT], i * 6);
+    trailPositions.set([x + nx, y + ny, BALL_RADIUS, x - nx, y - ny, BALL_RADIUS], i * 6);
     trailTexCoords.set([age, 1, age, -1], i * 4);
   });
   gl.useProgram(trailProgram);
@@ -774,6 +789,10 @@ function drawTrail(projection) {
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, trail.length * 2);
   gl.depthMask(true);
   gl.disable(gl.BLEND);
+}
+
+function drawTrail(projection) {
+  for (const { points } of trails.values()) drawTrailPoints(points, projection);
 }
 
 function blurPass(source, target, step, threshold) {
@@ -808,6 +827,54 @@ function drawComposite(bloomEnabled = true) {
   });
   gl.activeTexture(gl.TEXTURE0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function drawSecondaryView(fieldIndex, viewport, trailOn, useConformalSky, dt, mainCamera, mainProjection) {
+  const field = rect(table.fields[fieldIndex]);
+  secondaryCameraRect = secondaryCameraRect
+    ? lerp(secondaryCameraRect, field, smoothFactor(0.08, dt))
+    : field;
+  const c = center(secondaryCameraRect);
+  const tall = Math.min(1, Math.max(0, (1.1 - viewport.width / viewport.height) / 0.6));
+  const target = add(c, lerp(CAMERA.wide.target, CAMERA.tall.target, tall));
+  const eye = add(c, lerp(CAMERA.wide.eye, CAMERA.tall.eye, tall));
+  const camera = lookAt(eye, target, [0, 0, 1]);
+  const projection = fitProjection(
+    camera, viewport.width, viewport.height, { top: 0, bottom: 0 },
+    fitCorners(secondaryCameraRect), 1, viewport.aspectRatio,
+  );
+  const previousViewport = gl.getParameter(gl.VIEWPORT);
+  const previousScissor = gl.getParameter(gl.SCISSOR_BOX);
+  const hadScissor = gl.isEnabled(gl.SCISSOR_TEST);
+  const previousMirrorStrength = mirrorStrength;
+
+  try {
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(viewport.x, viewport.y, viewport.width, viewport.height);
+    gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(program);
+    setView(camera, NO_CLIP);
+    gl.uniformMatrix4fv(uniforms.uProjection, false, projection);
+    gl.uniform2fv(uniforms.uScreenSize, [viewport.width, viewport.height]);
+    if (useConformalSky && conformalSky) drawSky(conformalSky);
+    else drawSky2(projection);
+
+    mirrorStrength = 0;
+    drawScene();
+    drawWorld();
+    if (trailOn) drawTrail(projection);
+  } finally {
+    mirrorStrength = previousMirrorStrength;
+    gl.useProgram(program);
+    setView(mainCamera, NO_CLIP);
+    gl.uniformMatrix4fv(uniforms.uProjection, false, mainProjection);
+    gl.uniform2fv(uniforms.uScreenSize, [canvas.width, canvas.height]);
+    gl.viewport(...previousViewport);
+    gl.scissor(...previousScissor);
+    if (hadScissor) gl.enable(gl.SCISSOR_TEST);
+    else gl.disable(gl.SCISSOR_TEST);
+  }
 }
 
 function resize() {
@@ -847,7 +914,7 @@ function drawSky(texture) {
 
 let conformalSky = null;
 
-export function render(dt, insets, ballCam, zoom, dev = {}) {
+export function render(dt, insets, zoom, dev = {}) {
   const bloomOn = dev.bloom ?? true;
   const trailOn = dev.trail ?? true;
   const shadowsOn = dev.shadows ?? true;
@@ -857,6 +924,11 @@ export function render(dt, insets, ballCam, zoom, dev = {}) {
   const simDt = dev.simDt ?? dt;
 
   resize();
+  const secondaryField = secondaryFieldIndex();
+  dev.secondaryView?.setField(secondaryField);
+  const insetBounds = secondaryField === null ? null : dev.secondaryView?.getBounds();
+  const insetViewport = insetBounds ? canvasViewport(insetBounds) : null;
+  if (secondaryField === null || !insetViewport) secondaryCameraRect = null;
   updatePalette(dt, paletteOverride);
   updateTrail(simDt);
   const field = rect(table.fields[game.field]);
@@ -881,17 +953,10 @@ export function render(dt, insets, ballCam, zoom, dev = {}) {
     gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
-  let camera, projection;
-  if (ballCam) {
-    camera = chaseView(dt);
-    projection = perspective(2 * Math.atan(Math.tan(65 * Math.PI / 360) / zoom), canvas.width / canvas.height, 0.2, 120);
-  } else {
-    chaseEye = chaseTarget = null;
-    const tall = Math.min(1, Math.max(0, (1.1 - canvas.width / canvas.height) / 0.6));
-    const target = add(c, lerp(CAMERA.wide.target, CAMERA.tall.target, tall));
-    camera = orbit(add(c, lerp(CAMERA.wide.eye, CAMERA.tall.eye, tall)), target, target);
-    projection = fitProjection(camera, canvas.clientWidth, canvas.clientHeight, insets, fitCorners(cameraRect), zoom);
-  }
+  const tall = Math.min(1, Math.max(0, (1.1 - canvas.width / canvas.height) / 0.6));
+  const target = add(c, lerp(CAMERA.wide.target, CAMERA.tall.target, tall));
+  const camera = orbit(add(c, lerp(CAMERA.wide.eye, CAMERA.tall.eye, tall)), target, target);
+  const projection = fitProjection(camera, canvas.clientWidth, canvas.clientHeight, insets, fitCorners(cameraRect), zoom);
 
   gl.useProgram(program);
   gl.uniformMatrix4fv(uniforms.uProjection, false, projection);
@@ -936,6 +1001,12 @@ export function render(dt, insets, ballCam, zoom, dev = {}) {
   drawScene();
   drawWorld();
   if (trailOn) drawTrail(projection);
+  if (secondaryField !== null && insetViewport?.width > 0 && insetViewport?.height > 0) {
+    drawSecondaryView(
+      secondaryField, insetViewport, trailOn,
+      Boolean(dev.escherParams?.enabled), dt, camera, projection,
+    );
+  }
   resolveScene();
 
   gl.disable(gl.DEPTH_TEST);
